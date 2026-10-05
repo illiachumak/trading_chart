@@ -137,9 +137,11 @@ export class MarketEngine {
       while (until >= this.round.endTs) {
         const endTs = this.round.endTs
         flush(endTs)
-        out.push(...this.resolveRound(endTs))
+        out.push(this.resolveRound(endTs))
         this.round = this.openRound(this.round.id + 1, endTs)
         out.push({ type: 'round_started', ts: endTs, round: this.round, price: this.getPrice() })
+        // Built after the new round is open, so it carries the new roundId and an empty position.
+        out.push({ type: 'account', ts: endTs, account: this.account() })
       }
     }
 
@@ -283,7 +285,7 @@ export class MarketEngine {
     return trade
   }
 
-  private resolveRound(endTs: number): ServerPayload[] {
+  private resolveRound(endTs: number): ServerPayload {
     const roundId = this.round.id
     const outcome = this.deps.resolver.resolve(this.round)
     const payout = outcome === 'yes' ? this.position.yesShares : this.position.noShares
@@ -294,10 +296,7 @@ export class MarketEngine {
       this.config.roundHistoryLimit,
     )
     this.position = EMPTY_POSITION
-    return [
-      { type: 'round_resolved', ts: endTs, roundId, outcome, payout },
-      { type: 'account', ts: endTs, account: this.account() },
-    ]
+    return { type: 'round_resolved', ts: endTs, roundId, outcome, payout }
   }
 
   private openRound(id: number, startTs: number): RoundInfo {

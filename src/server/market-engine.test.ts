@@ -182,7 +182,7 @@ describe('MarketEngine', () => {
     const engine = makeEngine()
     engine.enqueueOrder(60_000, order())
     const out = engine.advance(60_000)
-    expect(out.map((p) => p.type)).toEqual(['round_resolved', 'account', 'round_started', 'order_result'])
+    expect(out.map((p) => p.type)).toEqual(['round_resolved', 'round_started', 'account', 'order_result'])
     expect(ofType(out, 'order_result')[0].result).toMatchObject({ status: 'rejected', reason: 'round_closed' })
   })
 
@@ -199,6 +199,7 @@ describe('MarketEngine', () => {
     const [{ account }] = ofType(out, 'account')
     expect(account.balance).toBeCloseTo(900 + result.shares, 9)
     expect(account.position.yesShares).toBe(0)
+    expect(account.roundId).toBe(2)
     expect(account.history[0]).toMatchObject({ roundId: 1, outcome: 'yes', spent: 100 })
     expect(account.history[0].pnl).toBeCloseTo(result.shares - 100, 9)
     const [started] = ofType(out, 'round_started')
@@ -220,7 +221,26 @@ describe('MarketEngine', () => {
     engine.enqueueMock(59_999, 10)
     engine.enqueueMock(60_000, 10)
     const out = engine.advance(60_500)
-    expect(out.map((p) => p.type)).toEqual(['trades', 'round_resolved', 'account', 'round_started', 'trades'])
+    expect(out.map((p) => p.type)).toEqual(['trades', 'round_resolved', 'round_started', 'account', 'trades'])
+    const [first, second] = ofType(out, 'trades')
+    expect(second.items[0].ts).toBe(60_000)
+    expect(second.items[0].priceAfter).toBeCloseTo(first.items[0].priceAfter, 12)
+  })
+
+  it('never lets the YES price fall below 1 - bound when mock traders always buy NO', () => {
+    const engine = new MarketEngine(
+      CONFIG,
+      { rng: createRng(1), resolver: YES_WINS, traders: { pickSide: () => 'no' } },
+      0,
+    )
+    let minPrice = 1
+    for (let i = 1; i <= 50; i++) {
+      engine.enqueueMock(i, 5_000)
+      engine.advance(i)
+      minPrice = Math.min(minPrice, engine.getPrice())
+    }
+    expect(minPrice).toBeGreaterThanOrEqual(0.15 - 1e-9)
+    expect(minPrice).toBeLessThan(0.15 + 1e-6)
   })
 
   it('keeps recent trades newest first and bounded', () => {

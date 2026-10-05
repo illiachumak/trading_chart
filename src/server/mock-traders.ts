@@ -28,6 +28,7 @@ export function drawShares(rng: Rng): number {
 }
 
 function clampRate(tradesPerSec: number): number {
+  if (!Number.isFinite(tradesPerSec)) return MIN_TRADES_PER_SEC
   return Math.min(MAX_TRADES_PER_SEC, Math.max(MIN_TRADES_PER_SEC, tradesPerSec))
 }
 

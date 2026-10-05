@@ -14,7 +14,7 @@ import {
   START_BALANCE,
 } from '@/config/market'
 import type { MainToWorker, WorkerToMain } from '@/lib/realtime/bridge'
-import { type ClientMessage, type DevCommand, parseClientMessage, type ServerMessage } from '@/lib/realtime/protocol'
+import { type ClientMessage, type DevCommand, parseClientMessage, type ServerMessage, type SnapshotPayload } from '@/lib/realtime/protocol'
 import { type EngineConfig, MarketEngine } from '@/server/market-engine'
 import { ArrivalGenerator, MEAN_REVERTING_TRADERS } from '@/server/mock-traders'
 import { Outbox } from '@/server/outbox'
@@ -53,6 +53,7 @@ export class MockServer {
   private readonly connections = new Set<number>()
   private latencyMs = 0
   private dropRate = 0
+  private readonly lastDeliverAt = new Map<number, number>()
 
   constructor(deps: MockServerDeps, config: ServerConfig) {
     this.deps = deps
@@ -64,6 +65,8 @@ export class MockServer {
     )
     this.outbox = new Outbox(config.replayCapacity)
     this.arrivals = new ArrivalGenerator(deps.rng, now, config.tradesPerSec)
+    // Publish the initial round so every snapshot has seq >= 1 (no connections yet, nothing to broadcast).
+    this.outbox.publish({ type: 'round_started', ts: now, round: this.engine.getRound(), price: this.engine.getPrice() })
   }
 
   getLastSeq(): number {
@@ -71,7 +74,7 @@ export class MockServer {
   }
 
   /** Full state as of `getLastSeq()`; used by tests to compare against what a client rebuilt. */
-  getSnapshot(): ServerMessage {
+  getSnapshot(): SnapshotPayload & { seq: number } {
     return { ...this.engine.snapshot(this.deps.now()), seq: this.outbox.lastSeq }
   }
 
@@ -83,6 +86,7 @@ export class MockServer {
         return
       case 'close':
         this.connections.delete(message.connId)
+        this.lastDeliverAt.delete(message.connId)
         return
       case 'data': {
         if (!this.connections.has(message.connId)) return
@@ -143,6 +147,7 @@ export class MockServer {
       case 'force_disconnect':
         for (const connId of this.connections) this.deps.post({ kind: 'closed', connId })
         this.connections.clear()
+        this.lastDeliverAt.clear()
         return
     }
   }
@@ -157,7 +162,15 @@ export class MockServer {
     const deliver = (): void => {
       if (this.connections.has(connId)) this.deps.post({ kind: 'data', connId, data })
     }
-    if (this.latencyMs > 0) this.deps.schedule(deliver, this.latencyMs)
-    else deliver()
+    // Per-connection FIFO: never deliver earlier than a message that is still pending.
+    const now = this.deps.now()
+    const pendingMs = (this.lastDeliverAt.get(connId) ?? 0) - now
+    if (this.latencyMs > 0 || pendingMs > 0) {
+      const delay = Math.max(this.latencyMs, pendingMs, 0)
+      this.lastDeliverAt.set(connId, now + delay)
+      this.deps.schedule(deliver, delay)
+    } else {
+      deliver()
+    }
   }
 }

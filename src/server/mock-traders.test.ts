@@ -42,6 +42,14 @@ describe('drawShares', () => {
   })
 })
 
+describe('ArrivalGenerator non-finite rate', () => {
+  it('falls back to the minimum rate instead of stalling on NaN', () => {
+    const gen = new ArrivalGenerator(createRng(5), 0, 20)
+    gen.setRate(Number.NaN)
+    expect(gen.generate(600_000).length).toBeGreaterThan(0)
+  })
+})
+
 describe('MEAN_REVERTING_TRADERS', () => {
   it('buys the cheap side more often near the bounds', () => {
     const rng = createRng(11)

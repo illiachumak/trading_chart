@@ -113,7 +113,10 @@ export type SnapshotPayload = {
   account: Account
 }
 
-/** A snapshot's `seq` is the last seq whose effects it already includes. */
+/**
+ * A snapshot's `seq` is the last seq whose effects it already includes.
+ * seq starts at 1; a snapshot's seq is always >= 1.
+ */
 export type ServerMessage = (ServerPayload | SnapshotPayload) & { seq: number }
 
 const SERVER_TYPES: ReadonlySet<string> = new Set([

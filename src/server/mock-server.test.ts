@@ -7,13 +7,13 @@ import { createRng } from '@/server/rng'
 function setup(overrides: Partial<ServerConfig> = {}) {
   let now = 0
   const posted: WorkerToMain[] = []
-  const scheduled: { fn: () => void; ms: number }[] = []
+  const scheduled: { fn: () => void; ms: number; due: number }[] = []
   const server = new MockServer(
     {
       post: (message) => posted.push(message),
       now: () => now,
       rng: createRng(42),
-      schedule: (fn, ms) => scheduled.push({ fn, ms }),
+      schedule: (fn, ms) => scheduled.push({ fn, ms, due: now + ms }),
     },
     { ...DEFAULT_SERVER_CONFIG, ...overrides },
   )
@@ -142,6 +142,33 @@ describe('MockServer', () => {
     expect(t.scheduled.every((s) => s.ms === 200)).toBe(true)
     for (const s of t.scheduled) s.fn()
     expect(t.messagesFor(1).length).toBe(t.scheduled.length)
+  })
+
+  it('keeps per-connection delivery in order when latency is lowered mid-stream', () => {
+    const t = setup()
+    t.connect(1)
+    t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 300 } })
+    t.posted.length = 0
+    t.tickFor(500)
+    t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 0 } })
+    t.tickFor(200)
+    expect(t.scheduled.length).toBeGreaterThan(1)
+    const byDue = [...t.scheduled].sort((a, b) => a.due - b.due)
+    for (const s of byDue) s.fn()
+    const seqs = t.messagesFor(1).map((m) => m.seq)
+    expect(seqs.length).toBeGreaterThan(1)
+    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1])
+  })
+
+  it('never serves a snapshot with seq 0, even before the first tick', () => {
+    const t = setup()
+    t.connect(1)
+    t.posted.length = 0
+    t.send(1, { type: 'resync', fromSeq: 1 })
+    const [snapshot] = t.messagesFor(1)
+    expect(snapshot.type).toBe('snapshot')
+    expect(snapshot.seq).toBeGreaterThanOrEqual(1)
+    expect(snapshot.seq).toBe(1)
   })
 
   it('ignores data for unknown connections and garbage payloads', () => {
