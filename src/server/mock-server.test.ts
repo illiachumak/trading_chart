@@ -110,8 +110,25 @@ describe('MockServer', () => {
     t.connect(1)
     t.send(1, { type: 'dev', command: { kind: 'set_drop_rate', rate: 0.9 } })
     t.tickFor(3_000)
-    const delivered = t.messagesFor(1).length
-    expect(delivered).toBeLessThan(t.server.getLastSeq())
+    const seqs = t.messagesFor(1).map((m) => m.seq)
+    const total = t.server.getLastSeq()
+    expect(seqs.length).toBeGreaterThan(0)
+    expect(seqs.length).toBeLessThan(total * 0.5)
+    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1])
+    // A gap between consecutive delivered seqs proves drops happen after seq assignment.
+    expect(seqs.some((seq, i) => i > 0 && seq - seqs[i - 1] > 1)).toBe(true)
+  })
+
+  it('suppresses delayed deliveries for a connection closed by force_disconnect', () => {
+    const t = setup()
+    t.connect(1)
+    t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 200 } })
+    t.tickFor(300)
+    expect(t.scheduled.length).toBeGreaterThan(0)
+    t.send(1, { type: 'dev', command: { kind: 'force_disconnect' } })
+    t.posted.length = 0
+    for (const s of t.scheduled) s.fn()
+    expect(t.posted).toEqual([])
   })
 
   it('delays delivery by the configured latency', () => {
