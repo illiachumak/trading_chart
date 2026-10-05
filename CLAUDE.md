@@ -53,7 +53,7 @@ repo/
 
 ## 3. Realtime Data & Charts (critical)
 
-- **WebSocket ticks never go through React state.** No `useState`/`useReducer`/Zustand/TanStack Query for per-tick data. A tick in state = a re-render per tick.
+- **WebSocket ticks never go through React state.** No `useState`/`useReducer`/Zustand/TanStack Query for per-tick data. A tick in state = a re-render per tick. So avoid it.
 - **Chart instance and series live in `useRef`.** Create in `useEffect`, call `chart.remove()` on cleanup. Never recreate the chart on re-render.
 - **Apply ticks with `series.update()` directly**, outside the React render cycle.
 - **Batch via `requestAnimationFrame`.** Push incoming ticks into a buffer; flush once per frame. 50 messages per frame must mean 1 repaint, not 50. Within one flush, collapse ticks that hit the same bar time — only the last value per bar matters.
