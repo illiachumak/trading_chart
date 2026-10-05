@@ -21,7 +21,10 @@
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "strict": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Aliases */
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src"]
 }
