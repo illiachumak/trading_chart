@@ -41,6 +41,11 @@ describe('describeQuoteProtection', () => {
     expect(describeQuoteProtection(clipped)).toBe('You pay $1,234.50 · at least 2000.00 shares · worst avg 54.3¢')
   })
 
+  it('never overstates the guarantee when rounding', () => {
+    const quote: QuoteResult = { ...OK_QUOTE, worstAvgPrice: 0.54211, minShares: 12.349 }
+    expect(describeQuoteProtection(quote)).toBe('You pay $10.00 · at least 12.34 shares · worst avg 54.3¢')
+  })
+
   it('uses placeholders until a quote arrives', () => {
     expect(describeQuoteProtection('none')).toBe('You pay — · at least — shares · worst avg —')
   })

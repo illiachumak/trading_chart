@@ -31,7 +31,13 @@ export function TradeTicket() {
       <div className="flex flex-col items-start gap-2">
         <OrderStatusLine order={ticket.order} />
         {/* Re-submits through the normal submit path with the latest quote (new clientOrderId). */}
-        <RetryButton side={ticket.side} amount={ticket.amount} slippage={ticket.slippage} onRetry={ticket.submit} />
+        <RetryButton
+          side={ticket.side}
+          amount={ticket.amount}
+          slippage={ticket.slippage}
+          marketReady={ticket.marketReady}
+          onRetry={ticket.submit}
+        />
       </div>
     </Panel>
   )

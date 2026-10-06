@@ -1,7 +1,16 @@
 import type { OrderStatus } from '@/lib/realtime/account-store'
 import type { OrderResult, QuoteResult, RejectReason } from '@/lib/realtime/protocol'
 import { PRICE_BOUND } from '@/config/market'
-import { formatCents, formatPercent, formatShares, formatUsd, PLACEHOLDER } from '@/lib/utils/format'
+import {
+  formatCents,
+  formatCentsCeil,
+  formatCentsValue,
+  formatPercent,
+  formatShares,
+  formatSharesFloor,
+  formatUsd,
+  PLACEHOLDER,
+} from '@/lib/utils/format'
 import { SIDE_LABEL } from '@/lib/utils/side'
 
 export type OrderMessage = { tone: 'yes' | 'no' | 'warn'; text: string }
@@ -38,11 +47,14 @@ export function describeOrderResult(result: OrderResult): OrderMessage {
   }
 }
 
-/** Worst-case line for a quote; every number comes from the server quote, this only formats. */
+/**
+ * Worst-case line for a quote; every number comes from the server quote, this only formats.
+ * Rounding never overstates the guarantee: shares are floored, the worst price is ceiled.
+ */
 export function describeQuoteProtection(quote: Extract<QuoteResult, { status: 'ok' }> | 'none'): string {
   const pay = quote === 'none' ? PLACEHOLDER : formatUsd(quote.cost)
-  const shares = quote === 'none' ? PLACEHOLDER : formatShares(quote.minShares)
-  const worst = quote === 'none' ? PLACEHOLDER : formatCents(quote.worstAvgPrice)
+  const shares = quote === 'none' ? PLACEHOLDER : formatSharesFloor(quote.minShares)
+  const worst = quote === 'none' ? PLACEHOLDER : formatCentsCeil(quote.worstAvgPrice)
   return `You pay ${pay} · at least ${shares} shares · worst avg ${worst}`
 }
 
@@ -57,6 +69,5 @@ export function retryPriceFor(order: OrderStatus, quote: QuoteResult | 'none'): 
 }
 
 export function describeRetry(price: number): { label: string; ariaLabel: string } {
-  const cents = (price * 100).toFixed(1)
-  return { label: `Retry at ${formatCents(price)}`, ariaLabel: `Retry order at ${cents} cents` }
+  return { label: `Retry at ${formatCents(price)}`, ariaLabel: `Retry order at ${formatCentsValue(price)} cents` }
 }
