@@ -1,5 +1,7 @@
 import { PriceChart } from '@/components/features/chart/price-chart'
+import { RoundHistory } from '@/components/features/round/round-history'
 import { RoundHeader } from '@/components/features/round/round-header'
+import { TradesFeed } from '@/components/features/trades-feed/trades-feed'
 import { TradePanel } from '@/components/features/trade-panel/trade-panel'
 import { FeatureBoundary } from '@/components/common/feature-boundary'
 import { Header } from '@/components/layout/header'
@@ -22,7 +24,14 @@ export function AppShell() {
               </FeatureBoundary>
             </div>
           </section>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{/* Task 5: TradesFeed + RoundHistory */}</div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <FeatureBoundary id="trades-feed">
+              <TradesFeed />
+            </FeatureBoundary>
+            <FeatureBoundary id="round-history">
+              <RoundHistory />
+            </FeatureBoundary>
+          </div>
         </div>
         <aside className="flex flex-col gap-4">
           <FeatureBoundary id="trade-panel">
