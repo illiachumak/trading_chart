@@ -34,3 +34,10 @@ export const RESYNC_TIMEOUT_MS = 1_000
 export const MAX_PENDING_MESSAGES = 5_000
 export const CLOCK_SYNC_WINDOW = 20
 export const PERF_SAMPLE_CAPACITY = 4_000
+
+// UI
+export const QUOTE_DEBOUNCE_MS = 150
+export const QUOTE_REFRESH_MS = 1_000
+export const DEFAULT_MAX_SLIPPAGE = 0.02
+export const STRESS_TRADES_PER_SEC = 500
+export const HUD_REFRESH_MS = 500
