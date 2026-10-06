@@ -20,13 +20,23 @@ export type TradeTicket = {
 }
 
 export function useTradeTicket(): TradeTicket {
-  const [side, setSide] = useState<Side>('yes')
-  const [amountInput, setAmountInput] = useState('10')
+  const [side, setSideState] = useState<Side>('yes')
+  const [amountInput, setAmountState] = useState('10')
   const amount = parseAmount(amountInput)
   const quote = useQuote(side, amount)
   const round = useMarket(selectRound)
   const status = useMarket(selectStatus)
-  const { order, place } = usePlaceOrder()
+  const { order, place, dismiss } = usePlaceOrder()
+
+  // Editing the ticket makes the previous order's message stale.
+  const setSide = (next: Side): void => {
+    setSideState(next)
+    dismiss()
+  }
+  const setAmountInput = (value: string): void => {
+    setAmountState(value)
+    dismiss()
+  }
 
   const canSubmit =
     status === 'live' && round !== 'loading' && quote !== 'none' && quote.status === 'ok' && order.kind !== 'pending'

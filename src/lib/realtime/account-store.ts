@@ -1,5 +1,5 @@
 import type { MarketClient } from '@/lib/realtime/market-client'
-import type { Account, OrderResult, PlaceOrder, QuoteResult, ServerMessage, Side } from '@/lib/realtime/protocol'
+import type { Account, OrderResult, PlaceOrder, QuoteResult, RoundResult, ServerMessage, Side } from '@/lib/realtime/protocol'
 import { createExternalStore, type ExternalStore } from '@/lib/utils/external-store'
 
 export type OrderStatus =
@@ -17,10 +17,14 @@ export type OrderRequest = Omit<PlaceOrder, 'type'>
 
 type AccountClient = Pick<MarketClient, 'onMessage' | 'onStatus' | 'send'>
 
+const EMPTY_HISTORY: readonly RoundResult[] = []
+
 const INITIAL: AccountStoreState = { account: 'loading', order: { kind: 'idle' }, quote: 'none' }
 
 export const selectAccount = (s: AccountStoreState): Account | 'loading' => s.account
 export const selectOrder = (s: AccountStoreState): OrderStatus => s.order
+export const selectRoundHistory = (s: AccountStoreState): readonly RoundResult[] =>
+  s.account === 'loading' ? EMPTY_HISTORY : s.account.history
 export const selectQuote = (s: AccountStoreState): QuoteResult | 'none' => s.quote
 
 /**
@@ -70,6 +74,12 @@ export class AccountStore {
     return 'sent'
   }
 
+  /** Clears a finished order's message; a pending order is left alone. */
+  dismissOrder(): void {
+    const state = this.writable.getState()
+    if (state.order.kind === 'done') this.writable.setState({ ...state, order: { kind: 'idle' } })
+  }
+
   requestQuote(side: Side, amountUsd: number): void {
     const client = this.attached()
     const requestId = this.nextRequestId++
@@ -96,8 +106,15 @@ export class AccountStore {
         this.writable.setState({ ...state, quote: message.quote })
         return
       case 'round_started':
-        // A quote priced in the previous round is meaningless now.
-        if (state.quote !== 'none') this.writable.setState({ ...state, quote: 'none' })
+        // A quote priced in the previous round is meaningless now, and so is a finished order's message.
+        // A pending order is never touched: its result is still on the way.
+        if (state.quote !== 'none' || state.order.kind === 'done') {
+          this.writable.setState({
+            ...state,
+            quote: 'none',
+            order: state.order.kind === 'done' ? { kind: 'idle' } : state.order,
+          })
+        }
         return
       default:
         return

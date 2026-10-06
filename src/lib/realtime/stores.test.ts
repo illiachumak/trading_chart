@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AccountStore, type OrderRequest, selectOrder, selectQuote } from '@/lib/realtime/account-store'
+import { AccountStore, type OrderRequest, selectOrder, selectQuote, selectRoundHistory } from '@/lib/realtime/account-store'
 import { ClockSync } from '@/lib/realtime/clock-sync'
 import {
   MarketStore,
@@ -368,6 +368,41 @@ describe('AccountStore', () => {
     expect(selectQuote(account.store.getState())).toMatchObject({ requestId: 2 })
     client.emit({ type: 'round_started', seq: 3, ts: 0, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
     expect(selectQuote(account.store.getState())).toBe('none')
+  })
+
+  it('round_started clears a done order but keeps a pending one', () => {
+    const { account, client } = attached()
+    const started = (seq: number): ServerMessage => ({
+      type: 'round_started',
+      seq,
+      ts: 0,
+      round: { id: 2, startTs: 60_000, endTs: 120_000 },
+      price: 0.5,
+    })
+    account.placeOrder(ORDER)
+    client.emit(started(1))
+    expect(selectOrder(account.store.getState())).toEqual({ kind: 'pending', clientOrderId: 'mine' })
+    client.emit(filled(2, 'mine'))
+    expect(selectOrder(account.store.getState()).kind).toBe('done')
+    client.emit(started(3))
+    expect(selectOrder(account.store.getState())).toEqual({ kind: 'idle' })
+  })
+
+  it('dismissOrder turns done into idle and leaves pending alone', () => {
+    const { account, client } = attached()
+    account.placeOrder(ORDER)
+    account.dismissOrder()
+    expect(selectOrder(account.store.getState()).kind).toBe('pending')
+    client.emit(filled(1, 'mine'))
+    account.dismissOrder()
+    expect(selectOrder(account.store.getState())).toEqual({ kind: 'idle' })
+  })
+
+  it('selectRoundHistory returns a shared empty list while loading', () => {
+    const { account } = attached()
+    const first = selectRoundHistory(account.store.getState())
+    expect(first).toEqual([])
+    expect(selectRoundHistory(account.store.getState())).toBe(first)
   })
 
   it('resets when the client stops and refuses to send while detached', () => {

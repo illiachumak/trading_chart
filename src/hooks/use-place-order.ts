@@ -7,7 +7,11 @@ import type { Side } from '@/lib/realtime/protocol'
 
 export type PlaceOrderInput = { roundId: number; side: Side; amountUsd: number; expectedPrice: number }
 
-export function usePlaceOrder(): { order: OrderStatus; place: (input: PlaceOrderInput) => 'sent' | 'busy' } {
+export function usePlaceOrder(): {
+  order: OrderStatus
+  place: (input: PlaceOrderInput) => 'sent' | 'busy'
+  dismiss: () => void
+} {
   const runtime = useMarketRuntime()
   const order = useAccount(selectOrder)
   const place = useCallback(
@@ -16,5 +20,6 @@ export function usePlaceOrder(): { order: OrderStatus; place: (input: PlaceOrder
       runtime.account.placeOrder({ clientOrderId: crypto.randomUUID(), maxSlippage: DEFAULT_MAX_SLIPPAGE, ...input }),
     [runtime],
   )
-  return { order, place }
+  const dismiss = useCallback(() => runtime.account.dismissOrder(), [runtime])
+  return { order, place, dismiss }
 }
