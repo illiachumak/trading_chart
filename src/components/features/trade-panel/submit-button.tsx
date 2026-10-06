@@ -16,7 +16,13 @@ type SubmitButtonProps = {
 export function SubmitButton({ side, amount, marketReady, pending, onSubmit }: SubmitButtonProps) {
   const hasQuote = useAccount((state) => hasOkQuoteFor(state, side, amount))
   return (
-    <Button variant="primary" className="w-full" disabled={!marketReady || !hasQuote} onClick={onSubmit}>
+    <Button
+      variant="primary"
+      className="w-full"
+      disabled={!marketReady || !hasQuote}
+      data-testid="ticket-submit"
+      onClick={onSubmit}
+    >
       {pending ? 'Placing…' : `Buy ${SIDE_LABEL[side]}`}
     </Button>
   )
