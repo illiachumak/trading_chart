@@ -3,7 +3,18 @@ import { DEFAULT_TRADES_PER_SEC, STRESS_TRADES_PER_SEC } from '@/config/market'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import type { DevCommand } from '@/lib/realtime/protocol'
 
-export function useDevControls() {
+export type DevControls = {
+  rate: number
+  latencyMs: number
+  dropRatePct: number
+  setRate: (value: number) => void
+  setLatency: (value: number) => void
+  setDropRatePct: (value: number) => void
+  stress: () => void
+  dropConnection: () => void
+}
+
+export function useDevControls(): DevControls {
   const runtime = useMarketRuntime()
   const [rate, setRateState] = useState(DEFAULT_TRADES_PER_SEC)
   const [latencyMs, setLatencyState] = useState(0)

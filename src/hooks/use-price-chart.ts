@@ -103,7 +103,7 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
     // the left edge until it fills the width, then scrolls. A user scrolled into the past is left alone.
     const timeScale = chart.timeScale()
     const followLiveEdge = (): void => {
-      if (timeScale.scrollPosition() >= RIGHT_OFFSET) timeScale.scrollToPosition(RIGHT_OFFSET, false)
+      if (timeScale.scrollPosition() > RIGHT_OFFSET) timeScale.scrollToPosition(RIGHT_OFFSET, false)
     }
 
     const feeder = new ChartFeeder(
