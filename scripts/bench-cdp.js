@@ -12,7 +12,14 @@
 // CPU throttling: set CPU_THROTTLE below (1 = none, 4 / 6 = slowdown factor); it is applied through CDP
 // `Emulation.setCPUThrottlingRate` right after the session is created, before navigation.
 //
-// Returns a JSON string: { ua, cpuThrottle, samples, benchChars, cdp } — only the per-phase CDP aggregate, not the
+// CAVEAT: `Emulation.setCPUThrottlingRate` had no measurable effect in Playwright's automated Chromium (a
+// calibration busy-loop ran ~50 ms with and without rate 4, also when re-applied after navigation), so throttled
+// numbers from this script are unverified. Measure phone-class numbers in real Chrome DevTools -> Performance ->
+// CPU 4x/6x with `?bench=scale`. Self-check: after navigation the script runs a 2e7-iteration busy-loop in the page
+// and returns its duration as `calibrationMs`; run once with CPU_THROTTLE = 1 and once with 4 — if calibrationMs is
+// not roughly 4x larger, the throttle is not in effect and the throttled numbers must not be trusted.
+//
+// Returns a JSON string: { ua, cpuThrottle, calibrationMs, samples, benchChars, cdp } — only the per-phase CDP aggregate, not the
 // bench JSON (keeps the output small). Read the bench JSON afterwards from `[data-testid=bench-result]`
 // (e.g. `browser_evaluate`). cdp[phase] has
 //   wallSec            seconds of samples inside the measured window
@@ -25,6 +32,7 @@
 
 async (page) => {
   // Change the query to pick the scenario: ?bench=quick (~3 min) | matrix (~9 min) | deep (~16 min) | scale (~3.5 min).
+  // Unverified in automated Chromium, see the CAVEAT in the header.
   const CPU_THROTTLE = 1 // 1 = no throttling; 4 or 6 = CPU slowed by that factor
   const BENCH_URL = 'http://localhost:4173/?bench=matrix'
   const url = BENCH_URL
@@ -33,6 +41,12 @@ async (page) => {
   await session.send('Performance.enable', { timeDomain: 'timeTicks' })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(url)
+  const calibrationMs = await page.evaluate(() => {
+    const t0 = performance.now()
+    let x = 0
+    for (let i = 0; i < 2e7; i++) x += i % 7
+    return x < 0 ? -1 : +(performance.now() - t0).toFixed(1)
+  })
   const samples = []
   let finished = false
   const sampler = (async () => {
@@ -79,5 +93,5 @@ async (page) => {
     }
   }
   const ua = await page.evaluate(() => navigator.userAgent)
-  return JSON.stringify({ ua, cpuThrottle: CPU_THROTTLE, samples: samples.length, benchChars: bench.length, cdp })
+  return JSON.stringify({ ua, cpuThrottle: CPU_THROTTLE, calibrationMs, samples: samples.length, benchChars: bench.length, cdp })
 }

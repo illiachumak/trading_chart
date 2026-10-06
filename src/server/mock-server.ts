@@ -233,6 +233,7 @@ export class MockServer {
         return
       }
       case 'report_server_stats': {
+        // Dev-only: broadcast through the sequenced stream; a real backend would answer per connection / out of band.
         const { tickCount, tickMsTotal, tickMsMax } = this
         this.tickMsMax = 0
         this.broadcast(this.publish({ type: 'server_stats', ts: this.deps.now(), tickCount, tickMsTotal, tickMsMax }))
