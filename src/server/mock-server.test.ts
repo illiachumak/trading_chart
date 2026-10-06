@@ -181,7 +181,7 @@ describe('MockServer', () => {
   it('quotes and fills a user order', () => {
     const t = setup()
     t.connect(1)
-    t.send(1, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 25 })
+    t.send(1, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 25, maxSlippage: 0.03 })
     const quoteMsg = t.messagesFor(1).find((m) => m.type === 'quote_result')
     if (quoteMsg?.type !== 'quote_result' || quoteMsg.quote.status !== 'ok') throw new Error('no quote')
     t.send(1, {

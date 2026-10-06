@@ -27,16 +27,38 @@ export const selectRoundHistory = (s: AccountStoreState): readonly RoundResult[]
   s.account === 'loading' ? EMPTY_HISTORY : s.account.history
 export const selectQuote = (s: AccountStoreState): QuoteResult | 'none' => s.quote
 
-/** The stored quote if it answers exactly (side, amount); 'none' otherwise. Pure, for synchronous reads at submit time. */
-export function pickQuoteFor(state: AccountStoreState, side: Side, amount: number | 'invalid'): QuoteResult | 'none' {
+/**
+ * The stored quote if it answers exactly (side, amount, maxSlippage); 'none' otherwise.
+ * Pure, for synchronous reads at submit time. The tolerance must match because the quote's
+ * worst-price protection is computed for it.
+ */
+export function pickQuoteFor(
+  state: AccountStoreState,
+  side: Side,
+  amount: number | 'invalid',
+  maxSlippage: number,
+): QuoteResult | 'none' {
   const quote = state.quote
-  if (amount === 'invalid' || quote === 'none' || quote.side !== side || quote.amountUsd !== amount) return 'none'
+  if (
+    amount === 'invalid' ||
+    quote === 'none' ||
+    quote.side !== side ||
+    quote.amountUsd !== amount ||
+    quote.maxSlippage !== maxSlippage
+  ) {
+    return 'none'
+  }
   return quote
 }
 
-/** Primitive selector: true when a fillable quote exists for (side, amount). */
-export function hasOkQuoteFor(state: AccountStoreState, side: Side, amount: number | 'invalid'): boolean {
-  const quote = pickQuoteFor(state, side, amount)
+/** Primitive selector: true when a fillable quote exists for (side, amount, maxSlippage). */
+export function hasOkQuoteFor(
+  state: AccountStoreState,
+  side: Side,
+  amount: number | 'invalid',
+  maxSlippage: number,
+): boolean {
+  const quote = pickQuoteFor(state, side, amount, maxSlippage)
   return quote !== 'none' && quote.status === 'ok'
 }
 
@@ -116,11 +138,11 @@ export class AccountStore {
     if (state.order.kind === 'done') this.writable.setState({ ...state, order: { kind: 'idle' } })
   }
 
-  requestQuote(side: Side, amountUsd: number): void {
+  requestQuote(side: Side, amountUsd: number, maxSlippage: number): void {
     const client = this.attached()
     const requestId = this.nextRequestId++
     this.latestRequestId = requestId
-    client.send({ type: 'quote', requestId, side, amountUsd })
+    client.send({ type: 'quote', requestId, side, amountUsd, maxSlippage })
   }
 
   handle(message: ServerMessage): void {

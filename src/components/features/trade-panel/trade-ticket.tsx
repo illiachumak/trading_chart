@@ -22,6 +22,7 @@ export function TradeTicket() {
       <SubmitButton
         side={ticket.side}
         amount={ticket.amount}
+        slippage={ticket.slippage}
         marketReady={ticket.marketReady}
         pending={ticket.order.kind === 'pending'}
         onSubmit={ticket.submit}

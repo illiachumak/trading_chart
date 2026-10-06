@@ -10,7 +10,7 @@ type QuoteSummaryProps = { side: Side; amount: number | 'invalid'; slippage: num
 
 /** Leaf subscriber: the only quote reader besides the submit button, so quote updates re-render just these. */
 export function QuoteSummary({ side, amount, slippage }: QuoteSummaryProps) {
-  const quote = useAccount((state) => pickQuoteFor(state, side, amount))
+  const quote = useAccount((state) => pickQuoteFor(state, side, amount, slippage))
   const maxSlippage = formatSlippage(slippage)
   if (quote === 'none') {
     return <QuoteStats shares={PLACEHOLDER} avgPrice={PLACEHOLDER} toWin={PLACEHOLDER} profit={PLACEHOLDER} maxSlippage={maxSlippage} />

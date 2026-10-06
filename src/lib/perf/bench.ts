@@ -83,8 +83,8 @@ export type BenchTarget = {
   onStatus(listener: (status: ConnectionStatus) => void): () => void
   /** Asks the server for its tick stats; 'timeout' after 1 s (e.g. while disconnected). */
   serverStats(): Promise<ServerTickStats | 'timeout'>
-  /** Fresh quote for (side, amount); resolves 'timeout' after 2 s, 'no_round' before the first round. */
-  quote(side: Side, amountUsd: number): Promise<ProbeQuote | 'timeout' | 'no_round'>
+  /** Fresh quote for (side, amount, tolerance); resolves 'timeout' after 2 s, 'no_round' before the first round. */
+  quote(side: Side, amountUsd: number, maxSlippage: number): Promise<ProbeQuote | 'timeout' | 'no_round'>
   /** Id of the current round, or 'none' before the first one. */
   roundId(): number | 'none'
   /** Places an order and resolves with its result; 'timeout' after 3 s, 'no_round' before the first round. */
@@ -512,7 +512,7 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
   let side: Side = 'yes'
   while (!shouldStop()) {
     const startedAt = deps.now()
-    const probeQuote = await deps.target.quote(side, config.amountUsd)
+    const probeQuote = await deps.target.quote(side, config.amountUsd, config.slippage)
     if (probeQuote === 'timeout' || probeQuote === 'no_round' || probeQuote.quote.status !== 'ok') {
       tally.skipped++
     } else {

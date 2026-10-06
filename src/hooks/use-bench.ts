@@ -117,7 +117,7 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
       const round = selectRound(runtime.market.store.getState())
       return round === 'loading' ? 'none' : round.id
     },
-    quote: (side, amountUsd) => {
+    quote: (side, amountUsd, maxSlippage) => {
       // The round is captured with the request so a later round change is detectable.
       const round = selectRound(runtime.market.store.getState())
       if (round === 'loading') return Promise.resolve('no_round')
@@ -128,7 +128,7 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
           m.type === 'quote_result' && m.quote.requestId === requestId ? { quote: m.quote, roundId: round.id } : 'no',
         QUOTE_TIMEOUT_MS,
       )
-      runtime.send({ type: 'quote', requestId, side, amountUsd })
+      runtime.send({ type: 'quote', requestId, side, amountUsd, maxSlippage })
       return answer
     },
     placeOrder: (request) => {

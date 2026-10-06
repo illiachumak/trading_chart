@@ -133,7 +133,7 @@ function fakeBench(
         }, REPLY_MS),
       ),
     roundId: currentRound,
-    quote: (side, amountUsd) => {
+    quote: (side, amountUsd, maxSlippage) => {
       const roundId = currentRound()
       return new Promise<ProbeQuote | 'timeout'>((resolve) =>
         setTimeout(() => {
@@ -151,6 +151,9 @@ function fakeBench(
               potentialPayout: amountUsd / QUOTE_PRICE,
               potentialProfit: amountUsd,
               clipped: false,
+              maxSlippage,
+              worstAvgPrice: QUOTE_PRICE + maxSlippage,
+              minShares: amountUsd / (QUOTE_PRICE + maxSlippage),
             },
           })
         }, REPLY_MS),

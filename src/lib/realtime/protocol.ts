@@ -70,8 +70,14 @@ export type QuoteResult =
       potentialPayout: number
       potentialProfit: number
       clipped: boolean
+      /** Echo of the request's tolerance; the protection fields below are computed for it. */
+      maxSlippage: number
+      /** Worst average price the order can fill at: avgPrice + maxSlippage, capped at the price bound. */
+      worstAvgPrice: number
+      /** Fewest shares a fill can return: cost / worstAvgPrice (cost = amountUsd unless clipped). */
+      minShares: number
     }
-  | { status: 'unavailable'; requestId: number; side: Side; amountUsd: number }
+  | { status: 'unavailable'; requestId: number; side: Side; amountUsd: number; maxSlippage: number }
 
 export type DevCommand =
   | { kind: 'set_rate'; tradesPerSec: number }
@@ -105,7 +111,14 @@ export type PlaceOrder = {
   maxSlippage: number
 }
 
-export type QuoteRequest = { type: 'quote'; requestId: number; side: Side; amountUsd: number }
+export type QuoteRequest = {
+  type: 'quote'
+  requestId: number
+  side: Side
+  amountUsd: number
+  /** Tolerance the order would use (same units and limits as `PlaceOrder.maxSlippage`). */
+  maxSlippage: number
+}
 
 export type ClientMessage =
   | PlaceOrder
@@ -226,7 +239,9 @@ export function isClientMessage(value: unknown): value is ClientMessage {
         isNumber(value.maxSlippage)
       )
     case 'quote':
-      return isNumber(value.requestId) && isSide(value.side) && isNumber(value.amountUsd)
+      return (
+        isNumber(value.requestId) && isSide(value.side) && isNumber(value.amountUsd) && isNumber(value.maxSlippage)
+      )
     case 'resync':
       return Number.isInteger(value.fromSeq)
     case 'dev':

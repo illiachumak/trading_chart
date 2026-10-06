@@ -322,7 +322,7 @@ describe('AccountStore', () => {
     type: 'quote_result',
     seq,
     ts: 0,
-    quote: { status: 'unavailable', requestId, side: 'yes', amountUsd: 5 },
+    quote: { status: 'unavailable', requestId, side: 'yes', amountUsd: 5, maxSlippage: 0.03 },
   })
   const ORDER: OrderRequest = {
     clientOrderId: 'mine',
@@ -400,9 +400,10 @@ describe('AccountStore', () => {
 
   it('shows only the answer to the latest quote request and clears it on a new round', () => {
     const { account, client } = attached()
-    account.requestQuote('yes', 5)
-    account.requestQuote('yes', 50)
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 50, 0.05)
     expect(client.sent.map((m) => (m.type === 'quote' ? m.requestId : -1))).toEqual([1, 2])
+    expect(client.sent[1]).toEqual({ type: 'quote', requestId: 2, side: 'yes', amountUsd: 50, maxSlippage: 0.05 })
     client.emit(quoteResult(1, 1))
     expect(selectQuote(account.store.getState())).toBe('none')
     client.emit(quoteResult(2, 2))
@@ -457,25 +458,40 @@ describe('AccountStore', () => {
 })
 
 describe('pickQuoteFor / hasOkQuoteFor', () => {
-  const ok = { status: 'ok', requestId: 1, side: 'yes', amountUsd: 10, shares: 20, avgPrice: 0.5, cost: 10, potentialPayout: 20, potentialProfit: 10, clipped: false } as const
-  const unavailable = { status: 'unavailable', requestId: 2, side: 'yes', amountUsd: 10 } as const
+  const ok = {
+    status: 'ok',
+    requestId: 1,
+    side: 'yes',
+    amountUsd: 10,
+    shares: 20,
+    avgPrice: 0.5,
+    cost: 10,
+    potentialPayout: 20,
+    potentialProfit: 10,
+    clipped: false,
+    maxSlippage: 0.03,
+    worstAvgPrice: 0.53,
+    minShares: 10 / 0.53,
+  } as const
+  const unavailable = { status: 'unavailable', requestId: 2, side: 'yes', amountUsd: 10, maxSlippage: 0.03 } as const
   const withQuote = (quote: AccountStoreState['quote']): AccountStoreState => ({ account: 'loading', order: { kind: 'idle' }, quote })
 
   it('returns the quote for matching side and amount', () => {
-    expect(pickQuoteFor(withQuote(ok), 'yes', 10)).toBe(ok)
-    expect(hasOkQuoteFor(withQuote(ok), 'yes', 10)).toBe(true)
+    expect(pickQuoteFor(withQuote(ok), 'yes', 10, 0.03)).toBe(ok)
+    expect(hasOkQuoteFor(withQuote(ok), 'yes', 10, 0.03)).toBe(true)
   })
 
-  it('ignores other side or amount', () => {
-    expect(pickQuoteFor(withQuote(ok), 'no', 10)).toBe('none')
-    expect(pickQuoteFor(withQuote(ok), 'yes', 11)).toBe('none')
-    expect(hasOkQuoteFor(withQuote(ok), 'no', 10)).toBe(false)
+  it('ignores other side, amount or tolerance', () => {
+    expect(pickQuoteFor(withQuote(ok), 'yes', 10, 0.05)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'no', 10, 0.03)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 11, 0.03)).toBe('none')
+    expect(hasOkQuoteFor(withQuote(ok), 'no', 10, 0.03)).toBe(false)
   })
 
   it("is 'none' when unavailable, absent or the amount is invalid", () => {
-    expect(pickQuoteFor(withQuote('none'), 'yes', 10)).toBe('none')
-    expect(pickQuoteFor(withQuote(ok), 'yes', 'invalid')).toBe('none')
-    expect(pickQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(unavailable)
-    expect(hasOkQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(false)
+    expect(pickQuoteFor(withQuote('none'), 'yes', 10, 0.03)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 'invalid', 0.03)).toBe('none')
+    expect(pickQuoteFor(withQuote(unavailable), 'yes', 10, 0.03)).toBe(unavailable)
+    expect(hasOkQuoteFor(withQuote(unavailable), 'yes', 10, 0.03)).toBe(false)
   })
 })
