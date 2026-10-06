@@ -50,6 +50,7 @@ function samePosition(a: Position, b: Position): boolean {
   )
 }
 
+// History rows are immutable per roundId, so comparing id + pnl is enough.
 function sameHistory(a: readonly RoundResult[], b: readonly RoundResult[]): boolean {
   return a.length === b.length && a.every((row, i) => row.roundId === b[i].roundId && row.pnl === b[i].pnl)
 }

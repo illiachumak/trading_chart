@@ -68,6 +68,7 @@ export type DevCommand =
   | { kind: 'set_latency'; ms: number }
   | { kind: 'set_drop_rate'; rate: number }
   | { kind: 'set_batch_interval'; ms: number }
+  /** Dev/bench only: overwrites the cash balance, which breaks the starting-capital invariant (START_BALANCE). */
   | { kind: 'set_balance'; usd: number }
   | { kind: 'force_disconnect' }
 
