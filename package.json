@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:profile": "tsc -b && vite build --mode profiling",
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
