@@ -22,3 +22,12 @@ export const ORDER_RESULT_CACHE_SIZE = 1_000
 
 export const MAX_LATENCY_MS = 5_000
 export const MAX_DROP_RATE = 0.9
+
+// Client
+export const UI_THROTTLE_MS = 100
+export const CHART_BACKLOG_THRESHOLD = 30
+export const RECONNECT_BASE_MS = 250
+export const RECONNECT_MAX_MS = 5_000
+export const RESYNC_TIMEOUT_MS = 1_000
+export const CLOCK_SYNC_WINDOW = 20
+export const PERF_SAMPLE_CAPACITY = 4_000
