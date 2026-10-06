@@ -1,5 +1,7 @@
 // Wire contract between the market backend (mock worker today, real WS later) and the client.
 // Every server message carries a monotonically increasing `seq` and the server `ts` (ms).
+// Exception: `quote_result` is a reply to the requesting connection only, outside the sequenced
+// stream; its `seq` is the server's last published seq at answer time and is not consumed.
 
 import { isRecord } from '@/lib/utils/is-record'
 
@@ -70,8 +72,17 @@ export type QuoteResult =
       potentialPayout: number
       potentialProfit: number
       clipped: boolean
+      /** Echo of the request's tolerance; the protection fields below are computed for it. */
+      maxSlippage: number
+      /** Worst average price the order can fill at: avgPrice + maxSlippage, capped at the price bound. */
+      worstAvgPrice: number
+      /**
+       * Fewest shares a full fill can return: cost / worstAvgPrice (cost = amountUsd unless clipped). A fill that
+       * hits the price bound is partial and can return fewer (see describeQuoteProtection).
+       */
+      minShares: number
     }
-  | { status: 'unavailable'; requestId: number; side: Side; amountUsd: number }
+  | { status: 'unavailable'; requestId: number; side: Side; amountUsd: number; maxSlippage: number }
 
 export type DevCommand =
   | { kind: 'set_rate'; tradesPerSec: number }
@@ -84,6 +95,13 @@ export type DevCommand =
   /** Dev/bench only: overwrites the cash balance, which breaks the starting-capital invariant (START_BALANCE). */
   | { kind: 'set_balance'; usd: number }
   | { kind: 'force_disconnect' }
+  /**
+   * Dev/bench only: rebuilds the market (round 1 at now, 50/50, fresh account) and every random
+   * stream from `seed`, so the same seed replays the same trade sequence. Keeps rate, batch,
+   * latency, drop and aggregation settings; `seq` keeps increasing (the reset is announced on the
+   * normal stream as `round_started` + `account`).
+   */
+  | { kind: 'reset_market'; seed: number }
 
 export type PlaceOrder = {
   type: 'place_order'
@@ -98,7 +116,14 @@ export type PlaceOrder = {
   maxSlippage: number
 }
 
-export type QuoteRequest = { type: 'quote'; requestId: number; side: Side; amountUsd: number }
+export type QuoteRequest = {
+  type: 'quote'
+  requestId: number
+  side: Side
+  amountUsd: number
+  /** Tolerance the order would use (same units and limits as `PlaceOrder.maxSlippage`). */
+  maxSlippage: number
+}
 
 export type ClientMessage =
   | PlaceOrder
@@ -118,6 +143,7 @@ export type ServerPayload =
   | { type: 'round_started'; ts: number; round: RoundInfo; price: number }
   | { type: 'round_resolved'; ts: number; roundId: number; outcome: Side; payout: number }
   | { type: 'order_result'; ts: number; result: OrderResult }
+  /** Unsequenced per-connection reply (see the header comment). */
   | { type: 'quote_result'; ts: number; quote: QuoteResult }
   | { type: 'account'; ts: number; account: Account }
   | { type: 'heartbeat'; ts: number }
@@ -193,6 +219,8 @@ function isDevCommand(value: unknown): value is DevCommand {
       return value.mode === 'full' || value.mode === 'compact'
     case 'set_balance':
       return typeof value.usd === 'number' && Number.isFinite(value.usd)
+    case 'reset_market':
+      return Number.isInteger(value.seed)
     case 'report_server_stats':
     case 'force_disconnect':
       return true
@@ -217,7 +245,9 @@ export function isClientMessage(value: unknown): value is ClientMessage {
         isNumber(value.maxSlippage)
       )
     case 'quote':
-      return isNumber(value.requestId) && isSide(value.side) && isNumber(value.amountUsd)
+      return (
+        isNumber(value.requestId) && isSide(value.side) && isNumber(value.amountUsd) && isNumber(value.maxSlippage)
+      )
     case 'resync':
       return Number.isInteger(value.fromSeq)
     case 'dev':

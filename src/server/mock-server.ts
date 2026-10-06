@@ -77,14 +77,43 @@ function clamp(value: number, min: number, max: number): number {
 
 type PendingDelivery = { data: string; dueAt: number }
 
+/**
+ * Independent random streams: arrivals (timing + size), trader sides, round outcomes and faults.
+ * Separate so that e.g. how often the server ticks or how many messages it drops never changes
+ * which trades happen.
+ */
+type RngStreams = { arrivals: Rng; traders: Rng; resolver: Rng; fault: Rng }
+
+function splitRng(master: Rng): RngStreams {
+  const next = (): Rng => createRng(Math.floor(master() * 4_294_967_296))
+  return { arrivals: next(), traders: next(), resolver: next(), fault: next() }
+}
+
+type Market = { engine: MarketEngine; arrivals: ArrivalGenerator; faultRng: Rng }
+
+function createMarket(config: ServerConfig, rng: RngStreams, now: number, tradesPerSec: number, lastTradeId: number): Market {
+  return {
+    engine: new MarketEngine(
+      config,
+      { rng: rng.traders, resolver: createCoinflipResolver(rng.resolver), traders: MEAN_REVERTING_TRADERS },
+      now,
+      lastTradeId,
+    ),
+    arrivals: new ArrivalGenerator(rng.arrivals, now, tradesPerSec),
+    faultRng: rng.fault,
+  }
+}
+
 export class MockServer {
   private readonly deps: MockServerDeps
-  private readonly engine: MarketEngine
+  private readonly config: ServerConfig
+  /** Engine, arrivals and fault stream are rebuilt together by `reset_market`. */
+  private engine: MarketEngine
   private readonly outbox: Outbox
-  private readonly arrivals: ArrivalGenerator
+  private arrivals: ArrivalGenerator
   private readonly connections = new Set<number>()
   /** Separate stream so that fault settings never change trades or round outcomes. */
-  private readonly faultRng: Rng
+  private faultRng: Rng
   private latencyMs = 0
   private dropRate = 0
   private batchIntervalMs: number
@@ -99,17 +128,15 @@ export class MockServer {
 
   constructor(deps: MockServerDeps, config: ServerConfig) {
     this.deps = deps
+    this.config = config
     this.batchIntervalMs = config.batchIntervalMs
     this.aggregation = config.aggregation
-    this.faultRng = createRng(Math.floor(deps.rng() * 4_294_967_296))
     const now = deps.now()
-    this.engine = new MarketEngine(
-      config,
-      { rng: deps.rng, resolver: createCoinflipResolver(deps.rng), traders: MEAN_REVERTING_TRADERS },
-      now,
-    )
+    const market = createMarket(config, splitRng(deps.rng), now, config.tradesPerSec, 0)
+    this.engine = market.engine
+    this.arrivals = market.arrivals
+    this.faultRng = market.faultRng
     this.outbox = new Outbox(config.replayCapacity)
-    this.arrivals = new ArrivalGenerator(deps.rng, now, config.tradesPerSec)
     // Publish the initial round so every snapshot has seq >= 1 (no connections yet, nothing to broadcast).
     this.outbox.publish({ type: 'round_started', ts: now, round: this.engine.getRound(), price: this.engine.getPrice() })
     this.lastPublishAt = now
@@ -151,13 +178,34 @@ export class MockServer {
   /** Called every `getBatchIntervalMs()`: generate mock arrivals, execute due events, broadcast. */
   tick(): void {
     const startedAt = this.deps.perfNow()
-    const now = this.deps.now()
-    for (const arrival of this.arrivals.generate(now)) this.engine.enqueueMock(arrival.ts, arrival.shares)
-    for (const payload of this.engine.advance(now)) this.broadcast(this.publish(this.aggregate(payload)))
+    this.runMarket(this.deps.now())
     const elapsed = this.deps.perfNow() - startedAt
     this.tickCount++
     this.tickMsTotal += elapsed
     if (elapsed > this.tickMsMax) this.tickMsMax = elapsed
+  }
+
+  private runMarket(now: number): void {
+    for (const arrival of this.arrivals.generate(now)) this.engine.enqueueMock(arrival.ts, arrival.shares)
+    for (const payload of this.engine.advance(now)) this.broadcast(this.publish(this.aggregate(payload)))
+  }
+
+  /**
+   * Rebuilds the market and every random stream from `seed`; delivery settings stay as they are.
+   * The outbox is kept: seq keeps increasing (clients see no regression) and the replay ring stays
+   * valid, because the reset itself is part of the stream — a client that missed it gets the same
+   * `round_started` + `account` on replay.
+   */
+  private resetMarket(seed: number): void {
+    const now = this.deps.now()
+    // Settle the old market up to now first, so orders already received still get their results.
+    this.runMarket(now)
+    const market = createMarket(this.config, splitRng(createRng(seed)), now, this.arrivals.getRate(), this.engine.getLastTradeId())
+    this.engine = market.engine
+    this.arrivals = market.arrivals
+    this.faultRng = market.faultRng
+    this.broadcast(this.publish({ type: 'round_started', ts: now, round: this.engine.getRound(), price: this.engine.getPrice() }))
+    this.broadcast(this.publish({ type: 'account', ts: now, account: this.engine.getAccount() }))
   }
 
   /** Compaction happens before publish, so replays carry exactly what live clients got. */
@@ -197,7 +245,9 @@ export class MockServer {
         return
       }
       case 'quote':
-        this.broadcast(this.publish(this.engine.quote(now, message)))
+        // A reply to one connection, outside the sequenced stream: no seq is consumed and it is
+        // never replayed. It carries the current lastSeq only to satisfy the envelope.
+        this.send(connId, { ...this.engine.quote(now, message), seq: this.outbox.lastSeq })
         return
       case 'place_order':
         // Stamped with the server receive time; executed in ts order on the next tick.
@@ -239,6 +289,9 @@ export class MockServer {
         this.broadcast(this.publish({ type: 'server_stats', ts: this.deps.now(), tickCount, tickMsTotal, tickMsMax }))
         return
       }
+      case 'reset_market':
+        this.resetMarket(command.seed)
+        return
       case 'force_disconnect':
         for (const connId of this.connections) this.deps.post({ kind: 'closed', connId })
         this.connections.clear()

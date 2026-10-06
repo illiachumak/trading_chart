@@ -54,6 +54,11 @@ function isPositiveFinite(value: number): boolean {
   return Number.isFinite(value) && value > 0
 }
 
+/** Shared by orders and quotes: a tolerance outside [0, max] is invalid. */
+function isValidSlippage(value: number, max: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= max
+}
+
 export class MarketEngine {
   private readonly config: EngineConfig
   private readonly deps: EngineDeps
@@ -70,11 +75,17 @@ export class MarketEngine {
   private roundHistory: RoundResult[] = []
   private readonly orderResults = new Map<string, OrderResult>()
 
-  constructor(config: EngineConfig, deps: EngineDeps, now: number) {
+  /** `lastTradeId`: trade ids continue after it, so a market rebuilt in place never repeats an id. */
+  constructor(config: EngineConfig, deps: EngineDeps, now: number, lastTradeId = 0) {
     this.config = config
     this.deps = deps
     this.balance = config.startBalance
+    this.tradeCounter = lastTradeId
     this.round = this.openRound(1, now)
+  }
+
+  getLastTradeId(): number {
+    return this.tradeCounter
   }
 
   getRound(): RoundInfo {
@@ -94,15 +105,18 @@ export class MarketEngine {
   }
 
   quote(ts: number, request: QuoteRequest): QuoteResultPayload {
-    const { requestId, side, amountUsd } = request
+    const { requestId, side, amountUsd, maxSlippage } = request
     const unavailable: QuoteResultPayload = {
       type: 'quote_result',
       ts,
-      quote: { status: 'unavailable', requestId, side, amountUsd },
+      quote: { status: 'unavailable', requestId, side, amountUsd, maxSlippage },
     }
-    if (!isPositiveFinite(amountUsd)) return unavailable
+    if (!isPositiveFinite(amountUsd) || !isValidSlippage(maxSlippage, this.config.maxSlippage)) return unavailable
     const fill = buyWithBudget(this.diff, side, amountUsd, this.config.liquidity, this.config.priceBound)
     if (fill.shares <= EPSILON) return unavailable
+    const avgPrice = fill.cost / fill.shares
+    // No fill can average above the bound, so the tolerance is capped there.
+    const worstAvgPrice = Math.min(avgPrice + maxSlippage, this.config.priceBound)
     return {
       type: 'quote_result',
       ts,
@@ -112,11 +126,16 @@ export class MarketEngine {
         side,
         amountUsd,
         shares: fill.shares,
-        avgPrice: fill.cost / fill.shares,
+        avgPrice,
         cost: fill.cost,
         potentialPayout: fill.shares,
         potentialProfit: fill.shares - fill.cost,
         clipped: fill.clipped,
+        maxSlippage,
+        worstAvgPrice,
+        // A full fill at or below the worst average buys at least this many shares; a fill clipped at the bound
+        // (partial, refunded) can buy fewer, and the ticket says so for clipped / at-bound quotes.
+        minShares: fill.cost / worstAvgPrice,
       },
     }
   }
@@ -243,9 +262,7 @@ export class MarketEngine {
     if (
       !isPositiveFinite(amountUsd) ||
       !isPositiveFinite(request.expectedPrice) ||
-      !Number.isFinite(request.maxSlippage) ||
-      request.maxSlippage < 0 ||
-      request.maxSlippage > this.config.maxSlippage
+      !isValidSlippage(request.maxSlippage, this.config.maxSlippage)
     ) {
       return reject('invalid')
     }

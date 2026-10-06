@@ -122,7 +122,7 @@ describe('MarketEngine', () => {
 
   it('earlier mock trade executes first even if enqueued later', () => {
     const engine = makeEngine()
-    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100, maxSlippage: 0.03 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0 }))
     engine.enqueueMock(999, 200) // arrives at the server later, but happened 1 ms earlier
@@ -137,7 +137,7 @@ describe('MarketEngine', () => {
 
   it('fills when the price moved by less than the absolute tolerance', () => {
     const engine = makeEngine()
-    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100, maxSlippage: 0.03 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
     engine.enqueueMock(999, 150) // moves the average by roughly 1-2 cents
@@ -159,7 +159,7 @@ describe('MarketEngine', () => {
     engine.advance(10)
     expect(engine.getPrice()).toBeLessThan(0.25)
     mockSide.current = 'yes'
-    const quote = engine.quote(20, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    const quote = engine.quote(20, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100, maxSlippage: 0.03 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     expect(quote.avgPrice).toBeLessThan(0.25)
     engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
@@ -174,7 +174,7 @@ describe('MarketEngine', () => {
 
   it('fills at exactly expected + tolerance and accepts the maxSlippage cap', () => {
     const engine = makeEngine()
-    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100, maxSlippage: 0.03 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     // The server fills at the quoted average, so expectedPrice = avg - tolerance sits exactly on the boundary.
     engine.enqueueOrder(10, order({ clientOrderId: 'edge', expectedPrice: quote.avgPrice - 0.03, maxSlippage: 0.03 }))
@@ -185,7 +185,7 @@ describe('MarketEngine', () => {
 
   it('rejects with slippage when the price moved by more than the tolerance', () => {
     const engine = makeEngine()
-    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100, maxSlippage: 0.03 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.01 }))
     engine.enqueueMock(999, 400)
@@ -210,7 +210,7 @@ describe('MarketEngine', () => {
 
   it('a quote matches the subsequent fill and does not move the price', () => {
     const engine = makeEngine()
-    const quote = engine.quote(0, { type: 'quote', requestId: 7, side: 'no', amountUsd: 50 }).quote
+    const quote = engine.quote(0, { type: 'quote', requestId: 7, side: 'no', amountUsd: 50, maxSlippage: 0.03 }).quote
     expect(engine.getPrice()).toBe(0.5)
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     expect(quote.potentialPayout).toBeCloseTo(quote.shares, 12)
@@ -314,13 +314,56 @@ describe('MarketEngine', () => {
 
   it('quotes a clipped fill near the bound', () => {
     const engine = makeEngine()
-    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 5_000 }).quote
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 5_000, maxSlippage: 0.03 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     expect(quote.clipped).toBe(true)
     expect(quote.cost).toBeLessThan(5_000)
-    expect(engine.quote(0, { type: 'quote', requestId: 2, side: 'yes', amountUsd: 50 }).quote).toMatchObject({
+    expect(engine.quote(0, { type: 'quote', requestId: 2, side: 'yes', amountUsd: 50, maxSlippage: 0.03 }).quote).toMatchObject({
       clipped: false,
     })
+  })
+
+  it('quotes the worst average price and the minimum shares for the requested tolerance', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100, maxSlippage: 0.05 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    expect(quote.maxSlippage).toBe(0.05)
+    expect(quote.worstAvgPrice).toBeCloseTo(quote.avgPrice + 0.05, 12)
+    expect(quote.minShares).toBeCloseTo(100 / quote.worstAvgPrice, 9)
+    expect(quote.minShares).toBeLessThan(quote.shares)
+  })
+
+  it('caps the worst average price at the price bound', () => {
+    const engine = makeEngine()
+    engine.enqueueMock(10, 5_100) // YES flow lifts YES to ~84.5c, just below the 85c bound
+    engine.advance(10)
+    expect(engine.getPrice()).toBeGreaterThan(0.8)
+    const quote = engine.quote(20, { type: 'quote', requestId: 2, side: 'yes', amountUsd: 1, maxSlippage: 0.1 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    expect(quote.avgPrice + 0.1).toBeGreaterThan(CONFIG.priceBound)
+    expect(quote.worstAvgPrice).toBe(CONFIG.priceBound)
+    expect(quote.minShares).toBeCloseTo(quote.cost / CONFIG.priceBound, 9)
+  })
+
+  it('bases minShares on the fillable cost of a clipped quote', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 5_000, maxSlippage: 0.03 }).quote
+    if (quote.status !== 'ok' || !quote.clipped) throw new Error('expected a clipped quote')
+    expect(quote.minShares).toBeCloseTo(quote.cost / quote.worstAvgPrice, 9)
+    expect(quote.minShares).toBeLessThanOrEqual(quote.shares)
+  })
+
+  it.each([0.11, -0.01, Number.NaN])('answers a quote with maxSlippage %s as unavailable', (maxSlippage) => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 3, side: 'no', amountUsd: 10, maxSlippage }).quote
+    expect(quote).toEqual({ status: 'unavailable', requestId: 3, side: 'no', amountUsd: 10, maxSlippage })
+  })
+
+  it('accepts a quote at the maxSlippage cap and at zero', () => {
+    const engine = makeEngine()
+    for (const maxSlippage of [0, 0.1]) {
+      expect(engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 10, maxSlippage }).quote.status).toBe('ok')
+    }
   })
 
   it('forgets the oldest clientOrderId once the idempotency cache is full', () => {

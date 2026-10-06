@@ -33,7 +33,7 @@ export function useTradeTicket(): TradeTicket {
   const round = useMarket(selectRound)
   const status = useMarket(selectStatus)
   const { order, place, dismiss } = usePlaceOrder()
-  useQuoteRequests(side, amount, order.kind === 'pending')
+  useQuoteRequests(side, amount, slippage, order.kind === 'pending')
 
   // Editing the ticket makes the previous order's message stale.
   const setSide = (next: Side): void => {
@@ -55,7 +55,7 @@ export function useTradeTicket(): TradeTicket {
   const submit = (): void => {
     if (status !== 'live' || round === 'loading' || order.kind === 'pending') return
     // Read the latest quote now (not from a render closure), so the order uses the freshest price.
-    const quote = pickQuoteFor(runtime.account.store.getState(), side, amount)
+    const quote = pickQuoteFor(runtime.account.store.getState(), side, amount, slippage)
     if (quote === 'none' || quote.status !== 'ok') return
     // The quote's average price is what the user saw; the server enforces slippage against it.
     place({

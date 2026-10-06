@@ -46,9 +46,11 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage(JSON.stringify({ ...order, clientOrderId: '' }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ ...order, side: 'YES' }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ ...order, amountUsd: Number.NaN }))).toBe('invalid')
-    expect(parseClientMessage(JSON.stringify({ type: 'quote', requestId: 1, side: 'maybe', amountUsd: 5 }))).toBe(
-      'invalid',
-    )
+    const quote = { type: 'quote', requestId: 1, side: 'yes', amountUsd: 5, maxSlippage: 0.03 }
+    expect(parseClientMessage(JSON.stringify(quote))).toEqual(quote)
+    expect(parseClientMessage(JSON.stringify({ ...quote, side: 'maybe' }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ ...quote, maxSlippage: undefined }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ ...quote, maxSlippage: '0.03' }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ type: 'resync' }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ type: 'resync', fromSeq: 1.5 }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ type: 'dev' }))).toBe('invalid')
@@ -85,6 +87,13 @@ describe('parseClientMessage', () => {
       type: 'dev',
       command: { kind: 'force_disconnect' },
     })
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market', seed: 42 } }))).toEqual({
+      type: 'dev',
+      command: { kind: 'reset_market', seed: 42 },
+    })
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market', seed: '42' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market', seed: 1.5 } }))).toBe('invalid')
   })
 })
 

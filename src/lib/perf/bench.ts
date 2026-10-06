@@ -3,7 +3,8 @@
 // same collectors the HUD uses. Pure — the browser wiring is in useBench.
 
 import { BATCH_INTERVAL_MS, DEFAULT_AGGREGATION, DEFAULT_TRADES_PER_SEC } from '@/config/market'
-import type { PerfMetrics } from '@/lib/perf/perf-metrics'
+import { type RecoveryTimeline, type StatusSample, percentileOfSorted, recoveryTimes } from '@/lib/perf/metrics-math'
+import type { PerfMetrics, PerfSnapshot } from '@/lib/perf/perf-metrics'
 import { ratesPerSecond } from '@/lib/perf/rates'
 import type { ClientStats, ConnectionStatus } from '@/lib/realtime/market-client'
 import type {
@@ -18,7 +19,8 @@ import { isRecord } from '@/lib/utils/is-record'
 
 export type ProbeConfig = { slippage: number; amountUsd: number; everyMs: number; quoteAgeMs: number }
 
-export type BenchGroup = 'load' | 'batch' | 'slippage' | 'faults'
+/** 'stress' = a limit run past the realistic range (reported, not tracked against a budget). */
+export type BenchGroup = 'load' | 'batch' | 'slippage' | 'faults' | 'stress'
 
 export type BenchPhase = {
   name: string
@@ -31,6 +33,11 @@ export type BenchPhase = {
   dropRate: number
   aggregation: AggregationMode
   probe: ProbeConfig | 'off'
+  /**
+   * A number resets the market from this seed at phase start (before warm-up), so every run sees
+   * the same trade sequence for the same rate; 'live' keeps whatever market is running.
+   */
+  seed: number | 'live'
 }
 
 export type BenchScenario = { phases: readonly BenchPhase[]; warmupMs: number }
@@ -72,18 +79,35 @@ export type BenchTarget = {
   sendDev(command: DevCommand): void
   stats(): ClientStats
   status(): ConnectionStatus
+  /** Subscribes to client status changes (recovery timeline); returns unsubscribe. */
+  onStatus(listener: (status: ConnectionStatus) => void): () => void
   /** Asks the server for its tick stats; 'timeout' after 1 s (e.g. while disconnected). */
   serverStats(): Promise<ServerTickStats | 'timeout'>
-  /** Fresh quote for (side, amount); resolves 'timeout' after 2 s, 'no_round' before the first round. */
-  quote(side: Side, amountUsd: number): Promise<ProbeQuote | 'timeout' | 'no_round'>
+  /** Fresh quote for (side, amount, tolerance); resolves 'timeout' after 2 s, 'no_round' before the first round. */
+  quote(side: Side, amountUsd: number, maxSlippage: number): Promise<ProbeQuote | 'timeout' | 'no_round'>
   /** Id of the current round, or 'none' before the first one. */
   roundId(): number | 'none'
   /** Places an order and resolves with its result; 'timeout' after 3 s, 'no_round' before the first round. */
   placeOrder(request: OrderProbeRequest): Promise<OrderResult | 'timeout' | 'no_round'>
 }
 
+/** Run-level environment, the same for every phase of a run. */
+export type BenchRunEnvironment = {
+  userAgent: string
+  devicePixelRatio: number
+  hardwareConcurrency: number
+  /** Short git hash baked in at build time; 'unknown' when git was unavailable. */
+  buildHash: string
+  /** Free-text label from the URL `&cpu=` (e.g. '4x', 'pixel7'); metadata only, nothing is throttled. 'none' when absent. */
+  cpuThrottleLabel: string
+}
+
+/** Environment metadata stored with every phase result: run-level fields + what the window measured. */
+export type BenchEnvironment = BenchRunEnvironment & { displayHz: number | 'n/a'; seed: number | 'live' }
+
 export type BenchDeps = {
   target: BenchTarget
+  environment: BenchRunEnvironment
   metrics: PerfMetrics
   sleep(ms: number): Promise<void>
   /** Monotonic clock (performance.now in the browser). */
@@ -106,19 +130,29 @@ export type BenchPhaseResult = {
   latencyMs: number
   dropRate: number
   aggregation: AggregationMode
+  seed: number | 'live'
+  /** The market was reset from `seed` (sent while live); false for 'live' phases or when the connection never came back. */
+  seedApplied: boolean
   durationSec: number
   /** Measured window in `now()` time (performance.now in the browser). */
   windowStartMs: number
   windowEndMs: number
   /** Date.now() at window start. */
   wallClockStartMs: number
+  /** Metadata only (1000 / median frame); compare runs by frame percentiles and pctFramesOverBudget. */
   fps: number
+  frameP50Ms: number
   frameP95Ms: number
+  frameP99Ms: number
+  /** % of frames longer than FRAME_MISS_THRESHOLD_MS (1.5 x the 60 Hz budget, ~25 ms). */
+  pctFramesOverBudget: number
+  displayHz: number | 'n/a'
   flushP50Ms: number
   flushP95Ms: number
   flushMaxMs: number
-  latencyP50Ms: number
-  latencyP95Ms: number
+  /** Data age at paint: server now − oldest tick of each chart flush (replaces the v2 newest-tick latencyP50Ms/P95Ms). */
+  dataAgeP50Ms: number
+  dataAgeP95Ms: number
   ticksPerFlushP50: number
   receivedMessagesPerSec: number
   /** All trades the server reported (shipped + aggregated). Below `tradesPerSec` = the pipeline can't keep up. */
@@ -132,6 +166,24 @@ export type BenchPhaseResult = {
   longTasks: number
   /** Longest long task inside the measured window. */
   longTaskMaxMs: number
+  /** The Long Animation Frames API is available; tells "unsupported" apart from other 'n/a' LoAF values. */
+  loafSupported: boolean
+  /** Long Animation Frames per minute of window; 'n/a' where the API is unsupported (non-Chromium). */
+  loafPerMin: number | 'n/a'
+  loafMaxMs: number | 'n/a'
+  loafBlockingMaxMs: number | 'n/a'
+  /**
+   * The Event Timing API is available. With it, inpP75Ms 'n/a' means no interaction reached the 16 ms reporting
+   * threshold in the window; without it, INP cannot be measured at all.
+   */
+  inpSupported: boolean
+  /**
+   * INP-style: interactions in the window (Event Timing, ≥16 ms entries only) and their p75 / max latency.
+   * Event Timing durations are rounded to 8 ms, so values move in 8 ms steps.
+   */
+  interactions: number
+  inpP75Ms: number | 'n/a'
+  inpMaxMs: number | 'n/a'
   /** Worker `tick()` calls per second; below 1000 / batchMs = the worker can't keep its batch interval. */
   serverTicksPerSec: number | 'n/a'
   serverTickMsAvg: number | 'n/a'
@@ -142,9 +194,17 @@ export type BenchPhaseResult = {
   resyncs: number
   duplicates: number
   reconnects: number
+  /** Outages (status left `live`) that started in the window and recovered by the end of settle. */
+  recoveries: number
+  /** Disconnect → live, per outage; 'n/a' without outages. */
+  recoveryP50Ms: number | 'n/a'
+  recoveryMaxMs: number | 'n/a'
+  /** Outages still open when the settle wait gave up. */
+  unrecovered: number
   endedLive: boolean
   probeConfig: ProbeConfig | 'off'
   probe: ProbeResult | 'off'
+  environment: BenchEnvironment
 }
 
 // --- Scenarios (see the "Experiment design" table in the PR 4 v2 plan) ---
@@ -167,6 +227,7 @@ const phase = (fields: Partial<BenchPhase> & Pick<BenchPhase, 'name' | 'group' |
   // The published v2 numbers were measured with every trade shipped; keep these scenarios reproducible.
   aggregation: 'full',
   probe: 'off',
+  seed: 'live',
   ...fields,
 })
 
@@ -249,6 +310,84 @@ const SCALE_PHASES: readonly BenchPhase[] = [
 
 export const SCALE_SCENARIO: BenchScenario = { phases: SCALE_PHASES, warmupMs: 2_000 }
 
+// --- Realistic scenario (the tracked set, with soak): server defaults (compact, 100 ms), fixed seeds ---
+
+const REALISTIC_PHASE_MS = 12_000
+const REALISTIC_BURST_MS = 30_000
+const REALISTIC_SLIPPAGE_MS = 20_000
+const REALISTIC_PROBE_EVERY_MS = 300
+const REALISTIC_QUOTE_AGE_MS = 250
+const REALISTIC_SLIPPAGE_RATES = [30, 100, 300] as const
+/** One-way latency injected by set_latency. */
+const REALISTIC_LATENCIES_MS = [0, 150] as const
+
+/**
+ * Fixed seeds, the same on every run. Slippage phases share one seed per rate so every tolerance
+ * and latency at that rate sees the same arrivals and sizes; only the probe settings differ.
+ */
+export const REALISTIC_SEEDS = {
+  steady30: 30_001,
+  steady300: 300_001,
+  burst1000: 1_000_001,
+  stress5000: 5_000_001,
+  disconnects: 100_001,
+  dropLatency: 100_002,
+  slippage: { 30: 30_101, 100: 100_101, 300: 300_101 },
+} as const
+
+const realisticPhase = (fields: Partial<BenchPhase> & Pick<BenchPhase, 'name' | 'group' | 'tradesPerSec' | 'seed'>): BenchPhase =>
+  phase({ aggregation: 'compact', durationMs: REALISTIC_PHASE_MS, ...fields })
+
+const REALISTIC_PHASES: readonly BenchPhase[] = [
+  realisticPhase({ name: 'steady 30/s', group: 'load', tradesPerSec: 30, seed: REALISTIC_SEEDS.steady30 }),
+  realisticPhase({ name: 'steady 300/s', group: 'load', tradesPerSec: 300, seed: REALISTIC_SEEDS.steady300 }),
+  realisticPhase({
+    name: 'burst 1000/s',
+    group: 'load',
+    tradesPerSec: 1_000,
+    durationMs: REALISTIC_BURST_MS,
+    seed: REALISTIC_SEEDS.burst1000,
+  }),
+  realisticPhase({ name: 'stress 5000/s (limit)', group: 'stress', tradesPerSec: 5_000, seed: REALISTIC_SEEDS.stress5000 }),
+  realisticPhase({
+    name: 'faults 3 disconnects @100/s',
+    group: 'faults',
+    tradesPerSec: 100,
+    disconnects: 3,
+    seed: REALISTIC_SEEDS.disconnects,
+  }),
+  realisticPhase({
+    name: 'faults drop 10% + 200ms @100/s',
+    group: 'faults',
+    tradesPerSec: 100,
+    dropRate: 0.1,
+    latencyMs: 200,
+    seed: REALISTIC_SEEDS.dropLatency,
+  }),
+  ...SLIPPAGE_SWEEP.flatMap((slippage) =>
+    REALISTIC_SLIPPAGE_RATES.flatMap((rate) =>
+      REALISTIC_LATENCIES_MS.map((latencyMs) =>
+        realisticPhase({
+          name: `slip ${Math.round(slippage * 100)}¢ lat ${latencyMs}ms @${rate}/s`,
+          group: 'slippage',
+          tradesPerSec: rate,
+          latencyMs,
+          durationMs: REALISTIC_SLIPPAGE_MS,
+          seed: REALISTIC_SEEDS.slippage[rate],
+          probe: {
+            slippage,
+            amountUsd: PROBE_AMOUNT_USD,
+            everyMs: REALISTIC_PROBE_EVERY_MS,
+            quoteAgeMs: REALISTIC_QUOTE_AGE_MS,
+          },
+        }),
+      ),
+    ),
+  ),
+]
+
+export const REALISTIC_SCENARIO: BenchScenario = { phases: REALISTIC_PHASES, warmupMs: 2_000 }
+
 // --- Helpers ---
 
 const LIVE_POLL_MS = 100
@@ -256,14 +395,27 @@ const LIVE_TIMEOUT_MS = 5_000
 const BYTES_PER_KB = 1_024
 const BYTES_PER_MB = 1_048_576
 
-function round2(value: number): number {
+export function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
-/** Nearest-rank percentile of an ascending array; 0 when empty. */
-function percentile(sorted: readonly number[], p: number): number {
-  if (sorted.length === 0) return 0
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]
+/**
+ * One line naming the seeded phases whose seed was not applied (not reproducible), or 'none'. Phases with
+ * seed 'live' (historical modes) never apply a seed by design, so they are not warned about.
+ */
+export function seedWarning(
+  results: readonly { phase: string; seed: number | 'live'; seedApplied: boolean }[],
+): string | 'none' {
+  const unseeded = results.filter((r) => r.seed !== 'live' && !r.seedApplied).map((r) => r.phase)
+  return unseeded.length === 0 ? 'none' : `⚠ seed not applied: ${unseeded.join(', ')}`
+}
+
+const MAX_CPU_LABEL_LENGTH = 32
+
+/** `&cpu=` label from a query string (metadata only: says how the tester throttled the CPU); 'none' when absent. */
+export function readCpuThrottleLabel(search: string): string {
+  const label = (new URLSearchParams(search).get('cpu') ?? '').trim().slice(0, MAX_CPU_LABEL_LENGTH)
+  return label === '' ? 'none' : label
 }
 
 /** Chrome-only `performance.memory.usedJSHeapSize`, in MB. */
@@ -271,6 +423,37 @@ export function readHeapMb(perf: unknown): number | 'n/a' {
   if (!isRecord(perf) || !isRecord(perf.memory)) return 'n/a'
   const used = perf.memory.usedJSHeapSize
   return typeof used === 'number' && Number.isFinite(used) ? round2(used / BYTES_PER_MB) : 'n/a'
+}
+
+function optionalRound2(value: number | 'n/a'): number | 'n/a' {
+  return value === 'n/a' ? value : round2(value)
+}
+
+const MS_PER_MIN = 60_000
+
+function loafWindow(
+  snap: PerfSnapshot,
+  count: number,
+  elapsedMs: number,
+): Pick<BenchPhaseResult, 'loafPerMin' | 'loafMaxMs' | 'loafBlockingMaxMs'> {
+  if (!snap.loafSupported || elapsedMs <= 0) return { loafPerMin: 'n/a', loafMaxMs: 'n/a', loafBlockingMaxMs: 'n/a' }
+  return {
+    loafPerMin: round2((count / elapsedMs) * MS_PER_MIN),
+    loafMaxMs: round2(snap.windowLoafMaxMs),
+    loafBlockingMaxMs: round2(snap.windowLoafBlockingMaxMs),
+  }
+}
+
+function recoverySummary(
+  timeline: RecoveryTimeline,
+): Pick<BenchPhaseResult, 'recoveries' | 'recoveryP50Ms' | 'recoveryMaxMs' | 'unrecovered'> {
+  const sorted = [...timeline.recoveredMs].sort((a, b) => a - b)
+  return {
+    recoveries: sorted.length,
+    recoveryP50Ms: sorted.length > 0 ? round2(percentileOfSorted(sorted, 0.5)) : 'n/a',
+    recoveryMaxMs: sorted.length > 0 ? round2(sorted[sorted.length - 1]) : 'n/a',
+    unrecovered: timeline.unrecovered,
+  }
 }
 
 type ServerTickWindow = Pick<BenchPhaseResult, 'serverTicksPerSec' | 'serverTickMsAvg' | 'serverTickMsMax'>
@@ -292,7 +475,10 @@ function serverTickWindow(
   }
 }
 
-async function waitForLive(deps: BenchDeps): Promise<boolean> {
+/** What the settings/wait-for-live helpers need; the soak runner shares them. */
+export type SettingsDeps = { target: Pick<BenchTarget, 'sendDev' | 'status'>; sleep(ms: number): Promise<void> }
+
+async function waitForLive(deps: SettingsDeps): Promise<boolean> {
   for (let waited = 0; waited < LIVE_TIMEOUT_MS; waited += LIVE_POLL_MS) {
     if (deps.target.status() === 'live') return true
     await deps.sleep(LIVE_POLL_MS)
@@ -325,8 +511,8 @@ function summarizeProbe(tally: ProbeTally): ProbeResult {
     n,
     fillRate: n > 0 ? round2(tally.filled / n) : 0,
     realizedSlippageCents: {
-      p50: round2(percentile(sorted, 0.5)),
-      p95: round2(percentile(sorted, 0.95)),
+      p50: round2(percentileOfSorted(sorted, 0.5)),
+      p95: round2(percentileOfSorted(sorted, 0.95)),
       max: round2(sorted.length > 0 ? sorted[sorted.length - 1] : 0),
     },
   }
@@ -341,7 +527,7 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
   let side: Side = 'yes'
   while (!shouldStop()) {
     const startedAt = deps.now()
-    const probeQuote = await deps.target.quote(side, config.amountUsd)
+    const probeQuote = await deps.target.quote(side, config.amountUsd, config.slippage)
     if (probeQuote === 'timeout' || probeQuote === 'no_round' || probeQuote.quote.status !== 'ok') {
       tally.skipped++
     } else {
@@ -378,15 +564,28 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
   return summarizeProbe(tally)
 }
 
-/** Every phase sends all five settings, in this order, so no phase inherits the previous one's. */
-function applySettings(p: BenchPhase, target: BenchTarget): void {
+/**
+ * Every phase sends all five settings, in this order, so no phase inherits the previous one's.
+ * Seeded phases first wait for live: the transport drops dev commands while disconnected, so a
+ * reset sent then would silently leave the previous market running. Resolves whether the seed was applied.
+ */
+export async function applySettings(
+  p: Pick<BenchPhase, 'tradesPerSec' | 'batchMs' | 'latencyMs' | 'dropRate' | 'aggregation' | 'seed' | 'probe'>,
+  deps: SettingsDeps,
+): Promise<boolean> {
+  const { target } = deps
+  const live = p.seed !== 'live' && (await waitForLive(deps))
   target.sendDev({ kind: 'set_rate', tradesPerSec: p.tradesPerSec })
   target.sendDev({ kind: 'set_batch_interval', ms: p.batchMs })
   target.sendDev({ kind: 'set_latency', ms: p.latencyMs })
   target.sendDev({ kind: 'set_drop_rate', rate: p.dropRate })
   target.sendDev({ kind: 'set_aggregation', mode: p.aggregation })
+  // After set_rate: a rate change redraws the pending arrival gap, which would make the replay
+  // depend on when the command landed. Before set_balance: the reset rebuilds the account.
+  if (p.seed !== 'live' && live) target.sendDev({ kind: 'reset_market', seed: p.seed })
   // Probe orders spend cash; start every probe phase from the same balance.
   if (p.probe !== 'off') target.sendDev({ kind: 'set_balance', usd: PROBE_START_BALANCE_USD })
+  return live
 }
 
 /** Runs the scenario; the server's settings are restored to defaults however it ends (done, cancelled or thrown). */
@@ -394,23 +593,41 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
   try {
     return await runPhases(scenario, deps)
   } finally {
-    deps.target.sendDev({ kind: 'set_rate', tradesPerSec: DEFAULT_TRADES_PER_SEC })
-    deps.target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
-    deps.target.sendDev({ kind: 'set_latency', ms: 0 })
-    deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })
-    deps.target.sendDev({ kind: 'set_aggregation', mode: DEFAULT_AGGREGATION })
+    restoreDefaults(deps.target)
   }
+}
+
+/** Puts the server back at the default rate/batch/latency/drop/aggregation. */
+export function restoreDefaults(target: Pick<BenchTarget, 'sendDev'>): void {
+  target.sendDev({ kind: 'set_rate', tradesPerSec: DEFAULT_TRADES_PER_SEC })
+  target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
+  target.sendDev({ kind: 'set_latency', ms: 0 })
+  target.sendDev({ kind: 'set_drop_rate', rate: 0 })
+  target.sendDev({ kind: 'set_aggregation', mode: DEFAULT_AGGREGATION })
 }
 
 async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<BenchPhaseResult[] | 'cancelled'> {
   const results: BenchPhaseResult[] = []
   for (const [index, p] of scenario.phases.entries()) {
     deps.onPhase(p, index)
-    applySettings(p, deps.target)
+    const seedApplied = await applySettings(p, deps)
     await deps.sleep(scenario.warmupMs)
     if (deps.isCancelled()) return 'cancelled'
 
+    const result = await measurePhase(p, seedApplied, deps)
+    if (result === 'cancelled') return 'cancelled'
+    results.push(result)
+  }
+  return results
+}
+
+/** One measured window plus its settle (probe drain, wait for live). Status listener is always removed. */
+async function measurePhase(p: BenchPhase, seedApplied: boolean, deps: BenchDeps): Promise<BenchPhaseResult | 'cancelled'> {
+  const timeline: StatusSample[] = []
+  const stopTimeline = deps.target.onStatus((status) => timeline.push({ at: deps.now(), status }))
+  try {
     deps.metrics.clearSamples()
+    timeline.push({ at: deps.now(), status: deps.target.status() })
     const startStats = { ...deps.target.stats() }
     const startTotals = deps.metrics.snapshot().totals
     const startedAt = deps.now()
@@ -458,11 +675,14 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     if (deps.isCancelled()) return 'cancelled'
     const endedLive = await waitForLive(deps)
     if (deps.isCancelled()) return 'cancelled'
+    // Outages that started in the window and recovered while settling still count.
+    const recovery = recoveryTimes(timeline, endedAt)
     // Dev commands are dropped while disconnected, so the reset goes out once live again.
     deps.target.sendDev({ kind: 'set_latency', ms: 0 })
     deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })
 
-    results.push({
+    const displayHz = snap.displayHz
+    return {
       phase: p.name,
       group: p.group,
       tradesPerSec: p.tradesPerSec,
@@ -470,17 +690,23 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       latencyMs: p.latencyMs,
       dropRate: p.dropRate,
       aggregation: p.aggregation,
+      seed: p.seed,
+      seedApplied,
       durationSec: round2(elapsedMs / 1_000),
       windowStartMs: round2(startedAt),
       windowEndMs: round2(endedAt),
       wallClockStartMs,
       fps: snap.fps,
+      frameP50Ms: round2(snap.frameP50),
       frameP95Ms: round2(snap.frameP95),
+      frameP99Ms: round2(snap.frameP99),
+      pctFramesOverBudget: round2(snap.pctFramesOverBudget),
+      displayHz,
       flushP50Ms: round2(snap.flushP50),
       flushP95Ms: round2(snap.flushP95),
       flushMaxMs: round2(snap.flushMax),
-      latencyP50Ms: round2(snap.latencyP50),
-      latencyP95Ms: round2(snap.latencyP95),
+      dataAgeP50Ms: round2(snap.dataAgeP50),
+      dataAgeP95Ms: round2(snap.dataAgeP95),
       ticksPerFlushP50: snap.ticksPerFlushP50,
       receivedMessagesPerSec: round2(received.messages),
       receivedTradesPerSec: round2(received.trades),
@@ -490,16 +716,25 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       commitsPerSec: Object.fromEntries(Object.entries(commits).map(([id, rate]) => [id, round2(rate)])),
       longTasks: snap.totals.longTasks - startTotals.longTasks,
       longTaskMaxMs: round2(snap.windowLongTaskMaxMs),
+      ...loafWindow(snap, snap.totals.longAnimationFrames - startTotals.longAnimationFrames, elapsedMs),
+      loafSupported: snap.loafSupported,
+      inpSupported: snap.inpSupported,
+      interactions: snap.interactions.count,
+      inpP75Ms: optionalRound2(snap.interactions.p75Ms),
+      inpMaxMs: optionalRound2(snap.interactions.maxMs),
       ...serverTicks,
       heapMb,
       gaps: endStats.gaps - startStats.gaps,
       resyncs: endStats.resyncs - startStats.resyncs,
       duplicates: endStats.duplicates - startStats.duplicates,
       reconnects: endStats.reconnects - startStats.reconnects,
+      ...recoverySummary(recovery),
       endedLive,
       probeConfig: p.probe,
       probe: probeResult,
-    })
+      environment: { ...deps.environment, displayHz, seed: p.seed },
+    }
+  } finally {
+    stopTimeline()
   }
-  return results
 }

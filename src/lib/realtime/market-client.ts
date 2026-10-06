@@ -1,6 +1,7 @@
 // Ordered, gap-free delivery of server messages across drops and reconnects.
 // Every message is applied exactly once in `seq` order; gaps trigger a resync,
-// and the server answers with a replay or a snapshot.
+// and the server answers with a replay or a snapshot. Exception: `quote_result` is an
+// unsequenced reply and is delivered as soon as it arrives.
 
 import {
   type ClientMessage,
@@ -208,6 +209,12 @@ export class MarketClient {
     const message = parseServerMessage(data)
     if (message === 'invalid') return
     this.stats.messages++
+    // Quote answers are per-connection replies outside the sequenced stream (their seq is just
+    // the server's lastSeq at answer time), so they skip ordering, gap and duplicate handling.
+    if (message.type === 'quote_result') {
+      this.deliver(message)
+      return
+    }
     if (message.type === 'snapshot') {
       this.acceptSnapshot(message)
       return

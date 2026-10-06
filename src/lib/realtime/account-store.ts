@@ -27,16 +27,38 @@ export const selectRoundHistory = (s: AccountStoreState): readonly RoundResult[]
   s.account === 'loading' ? EMPTY_HISTORY : s.account.history
 export const selectQuote = (s: AccountStoreState): QuoteResult | 'none' => s.quote
 
-/** The stored quote if it answers exactly (side, amount); 'none' otherwise. Pure, for synchronous reads at submit time. */
-export function pickQuoteFor(state: AccountStoreState, side: Side, amount: number | 'invalid'): QuoteResult | 'none' {
+/**
+ * The stored quote if it answers exactly (side, amount, maxSlippage); 'none' otherwise.
+ * Pure, for synchronous reads at submit time. The tolerance must match because the quote's
+ * worst-price protection is computed for it.
+ */
+export function pickQuoteFor(
+  state: AccountStoreState,
+  side: Side,
+  amount: number | 'invalid',
+  maxSlippage: number,
+): QuoteResult | 'none' {
   const quote = state.quote
-  if (amount === 'invalid' || quote === 'none' || quote.side !== side || quote.amountUsd !== amount) return 'none'
+  if (
+    amount === 'invalid' ||
+    quote === 'none' ||
+    quote.side !== side ||
+    quote.amountUsd !== amount ||
+    quote.maxSlippage !== maxSlippage
+  ) {
+    return 'none'
+  }
   return quote
 }
 
-/** Primitive selector: true when a fillable quote exists for (side, amount). */
-export function hasOkQuoteFor(state: AccountStoreState, side: Side, amount: number | 'invalid'): boolean {
-  const quote = pickQuoteFor(state, side, amount)
+/** Primitive selector: true when a fillable quote exists for (side, amount, maxSlippage). */
+export function hasOkQuoteFor(
+  state: AccountStoreState,
+  side: Side,
+  amount: number | 'invalid',
+  maxSlippage: number,
+): boolean {
+  const quote = pickQuoteFor(state, side, amount, maxSlippage)
   return quote !== 'none' && quote.status === 'ok'
 }
 
@@ -65,8 +87,8 @@ function shareStructure(previous: Account | 'loading', next: Account): Account {
 
 /**
  * Discrete, low-frequency events only — published immediately.
- * Owns the order/quote request flow: one order in flight at a time, and only the
- * answer to the latest quote request is shown.
+ * Owns the order/quote request flow: one order in flight at a time, and quote answers are
+ * applied newest-first (an answer older than the one shown is dropped).
  */
 export class AccountStore {
   private readonly writable = createExternalStore(INITIAL)
@@ -76,6 +98,8 @@ export class AccountStore {
   private nextRequestId = 1
   /** 0 = no quote requested yet. */
   private latestRequestId = 0
+  /** Newest requestId whose answer is shown; 0 = none yet. */
+  private lastAppliedRequestId = 0
 
   /** Re-attaching replaces the previous client, so messages are never handled twice. */
   attach(client: AccountClient): () => void {
@@ -97,6 +121,7 @@ export class AccountStore {
 
   reset(): void {
     this.latestRequestId = 0
+    this.lastAppliedRequestId = 0
     this.writable.setState(INITIAL)
   }
 
@@ -116,11 +141,11 @@ export class AccountStore {
     if (state.order.kind === 'done') this.writable.setState({ ...state, order: { kind: 'idle' } })
   }
 
-  requestQuote(side: Side, amountUsd: number): void {
+  requestQuote(side: Side, amountUsd: number, maxSlippage: number): void {
     const client = this.attached()
     const requestId = this.nextRequestId++
     this.latestRequestId = requestId
-    client.send({ type: 'quote', requestId, side, amountUsd })
+    client.send({ type: 'quote', requestId, side, amountUsd, maxSlippage })
   }
 
   handle(message: ServerMessage): void {
@@ -136,11 +161,16 @@ export class AccountStore {
         this.writable.setState({ ...state, order: { kind: 'done', result: message.result } })
         return
       }
-      case 'quote_result':
-        // Superseded requests and quotes for other connections are ignored.
-        if (message.quote.requestId !== this.latestRequestId) return
+      case 'quote_result': {
+        // Any answer newer than the one shown is applied, so a refresh interval shorter than the
+        // round trip cannot starve the ticket. Ids above the latest request are not ours
+        // (e.g. bench probe ids), and older answers arriving late are ignored.
+        const id = message.quote.requestId
+        if (id <= this.lastAppliedRequestId || id > this.latestRequestId) return
+        this.lastAppliedRequestId = id
         this.writable.setState({ ...state, quote: message.quote })
         return
+      }
       case 'round_started':
         // A quote priced in the previous round is meaningless now, and so is a finished order's message.
         // A pending order is never touched: its result is still on the way.

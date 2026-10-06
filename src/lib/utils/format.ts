@@ -16,8 +16,21 @@ export function formatPercent(price: number): string {
   return `${Math.round(price * 100)}%`
 }
 
+/** Absorbs float noise (e.g. 0.29 * 100 = 28.999…) before a directional round. */
+const ROUNDING_EPSILON = 1e-9
+
+/** Price in cents with one decimal, without the unit (for spoken labels), e.g. 0.634 -> "63.4". */
+export function formatCentsValue(price: number): string {
+  return (price * 100).toFixed(1)
+}
+
 export function formatCents(price: number): string {
-  return `${(price * 100).toFixed(1)}¢`
+  return `${formatCentsValue(price)}¢`
+}
+
+/** Like formatCents but rounded up, for an upper bound that must not be understated ("worst avg"). */
+export function formatCentsCeil(price: number): string {
+  return `${(Math.ceil(price * 1_000 - ROUNDING_EPSILON) / 10).toFixed(1)}¢`
 }
 
 /** Whole-cent label for an absolute price tolerance, e.g. 0.03 -> "3¢". */
@@ -42,6 +55,11 @@ export function formatSignedUsd(value: number): string {
 
 export function formatShares(value: number): string {
   return value.toFixed(2)
+}
+
+/** Like formatShares but rounded down, for a lower bound that must not be overstated ("at least"). */
+export function formatSharesFloor(value: number): string {
+  return (Math.floor(value * 100 + ROUNDING_EPSILON) / 100).toFixed(2)
 }
 
 export function formatClock(ts: number): string {

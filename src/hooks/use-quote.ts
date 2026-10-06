@@ -5,11 +5,16 @@ import type { Side } from '@/lib/realtime/protocol'
 import { shouldRefreshQuote } from '@/lib/utils/quote-refresh'
 
 /**
- * Requests a server-side quote for (side, amount): debounced, then refreshed while inputs are stable.
+ * Requests a server-side quote for (side, amount, maxSlippage): debounced, then refreshed while inputs are stable.
  * Refreshes pause while the tab is hidden or an order is pending; the next tick (or tab focus) resumes them.
  * Subscribes to nothing: results are read by leaf components, so the caller never re-renders on a quote.
  */
-export function useQuoteRequests(side: Side, amount: number | 'invalid', orderPending: boolean): void {
+export function useQuoteRequests(
+  side: Side,
+  amount: number | 'invalid',
+  maxSlippage: number,
+  orderPending: boolean,
+): void {
   const runtime = useMarketRuntime()
   // A ref, so a pending flag flip doesn't restart the debounce/interval.
   const orderPendingRef = useRef(orderPending)
@@ -19,10 +24,12 @@ export function useQuoteRequests(side: Side, amount: number | 'invalid', orderPe
 
   useEffect(() => {
     if (amount === 'invalid') return
-    // AccountStore assigns requestIds and shows only the answer to the latest request.
+    // AccountStore assigns increasing requestIds and applies an answer only when lastApplied < id ≤ latest:
+    // stale answers (older than the one shown) are dropped, but an older-than-latest answer still shows while
+    // the newest is in flight, so quotes never starve when RTT exceeds the refresh interval.
     const request = (): void => {
       if (shouldRefreshQuote({ hidden: document.hidden, orderPending: orderPendingRef.current })) {
-        runtime.account.requestQuote(side, amount)
+        runtime.account.requestQuote(side, amount, maxSlippage)
       }
     }
     const onVisibility = (): void => request()
@@ -37,5 +44,5 @@ export function useQuoteRequests(side: Side, amount: number | 'invalid', orderPe
       clearTimeout(debounce)
       if (refresh !== 'none') clearInterval(refresh)
     }
-  }, [runtime, side, amount])
+  }, [runtime, side, amount, maxSlippage])
 }

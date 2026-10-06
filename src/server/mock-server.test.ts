@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { BATCH_INTERVAL_MS, FEED_TRADES_PER_BATCH, MAX_BATCH_INTERVAL_MS, MIN_BATCH_INTERVAL_MS } from '@/config/market'
+import {
+  BATCH_INTERVAL_MS,
+  FEED_TRADES_PER_BATCH,
+  MAX_BATCH_INTERVAL_MS,
+  MIN_BATCH_INTERVAL_MS,
+  START_BALANCE,
+} from '@/config/market'
 import type { WorkerToMain } from '@/lib/realtime/bridge'
-import { type ClientMessage, parseServerMessage, type ServerMessage } from '@/lib/realtime/protocol'
+import { type ClientMessage, parseServerMessage, type ServerMessage, type Trade } from '@/lib/realtime/protocol'
 import { DEFAULT_SERVER_CONFIG, MockServer, type ServerConfig } from '@/server/mock-server'
 import { createRng } from '@/server/rng'
 
 type Timer = { fn: () => void; due: number; order: number }
 
 /** `timerJitterMs` makes timers fire late, like real `setTimeout` under load. */
-function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
+function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0, seed = 42) {
   let now = 0
   /** Fake monotonic clock: every read advances it by 3 ms, so each tick measures exactly 3 ms. */
   let perf = 0
@@ -24,7 +30,7 @@ function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
       },
       now: () => now,
       perfNow: () => (perf += 3),
-      rng: createRng(42),
+      rng: createRng(seed),
       schedule: (fn, ms) => timers.push({ fn, due: now + ms + timerJitterMs, order: timerOrder++ }),
     },
     { ...DEFAULT_SERVER_CONFIG, ...overrides },
@@ -175,7 +181,7 @@ describe('MockServer', () => {
   it('quotes and fills a user order', () => {
     const t = setup()
     t.connect(1)
-    t.send(1, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 25 })
+    t.send(1, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 25, maxSlippage: 0.03 })
     const quoteMsg = t.messagesFor(1).find((m) => m.type === 'quote_result')
     if (quoteMsg?.type !== 'quote_result' || quoteMsg.quote.status !== 'ok') throw new Error('no quote')
     t.send(1, {
@@ -190,6 +196,25 @@ describe('MockServer', () => {
     t.tickFor(100)
     const result = t.messagesFor(1).find((m) => m.type === 'order_result')
     expect(result).toMatchObject({ type: 'order_result', result: { clientOrderId: 'abc', status: 'filled' } })
+  })
+
+  it('answers a quote only to the requesting connection, outside the sequenced stream', () => {
+    const t = setup()
+    t.connect(1)
+    t.connect(2)
+    t.send(1, { type: 'dev', command: { kind: 'report_server_stats' } }) // publishes one sequenced message
+    const seqBefore = t.messagesFor(2).at(-1)?.seq ?? 0
+    t.send(1, { type: 'quote', requestId: 9, side: 'no', amountUsd: 10, maxSlippage: 0.05 })
+    const quotes = t.messagesFor(1).filter((m) => m.type === 'quote_result')
+    expect(quotes).toHaveLength(1)
+    expect(quotes[0]).toMatchObject({ seq: seqBefore, quote: { requestId: 9, side: 'no', maxSlippage: 0.05 } })
+    expect(t.messagesFor(2).some((m) => m.type === 'quote_result')).toBe(false)
+    // The quote consumed no seq: the next published message follows the previous one directly.
+    t.send(2, { type: 'dev', command: { kind: 'report_server_stats' } })
+    expect(t.messagesFor(2).at(-1)?.seq).toBe(seqBefore + 1)
+    // Nor is it replayed on resync.
+    t.send(2, { type: 'resync', fromSeq: seqBefore })
+    expect(t.messagesFor(2).filter((m) => m.type === 'quote_result')).toHaveLength(0)
   })
 
   it('force_disconnect closes the connection and stops delivery', () => {
@@ -316,5 +341,153 @@ describe('MockServer', () => {
       return t.server.getSnapshot().recentTrades.map((trade) => trade.priceAfter)
     }
     expect(run(0.5)).toEqual(run(0))
+  })
+
+  describe('reset_market', () => {
+    const reset = (t: ReturnType<typeof setup>, seed: number): void =>
+      t.send(1, { type: 'dev', command: { kind: 'reset_market', seed } })
+    /** Ticks every `stepMs` until `ms` has passed since now. */
+    const tickEvery = (t: ReturnType<typeof setup>, stepMs: number, ms: number): void => {
+      const end = t.now() + ms
+      while (t.now() < end) {
+        t.advanceTo(Math.min(end, t.now() + stepMs))
+        t.server.tick()
+      }
+    }
+    const tradesAfter = (t: ReturnType<typeof setup>, seq: number): Trade[] =>
+      t.messagesFor(1).flatMap((m) => (m.type === 'trades' && m.seq > seq ? m.items : []))
+    /** Trade identity relative to the reset: ids keep counting across a reset, ts is relative to it. */
+    const relative = (trades: readonly Trade[], resetAt: number) =>
+      trades.map(({ ts, side, shares, priceAfter, source }) => ({ ts: ts - resetAt, side, shares, priceAfter, source }))
+
+    it('replays the same trade sequence for the same seed, whatever came before and however often it ticks', () => {
+      const run = (bootSeed: number, warmupMs: number, stepMs: number) => {
+        const t = setup({ aggregation: 'full', tradesPerSec: 300, roundMs: 5_000 }, 0, bootSeed)
+        t.connect(1)
+        t.tickFor(warmupMs)
+        // Off the tick grid on purpose: in the browser the reset lands between ticks.
+        t.advanceTo(t.now() + 37)
+        const resetAt = t.now()
+        reset(t, 99)
+        // After the reset's own messages (the settle of the old market comes before them).
+        const seqAtReset = t.server.getLastSeq()
+        tickEvery(t, stepMs, 12_000) // crosses two round boundaries
+        return { trades: tradesAfter(t, seqAtReset), resetAt }
+      }
+      const a = run(1, 1_000, 100)
+      const b = run(2, 3_700, 33)
+      expect(a.trades.length).toBeGreaterThan(3_000)
+      expect(relative(a.trades, a.resetAt)).toEqual(relative(b.trades, b.resetAt))
+      expect(relative(run(1, 1_000, 100).trades, a.resetAt)).toEqual(relative(a.trades, a.resetAt))
+      const other = (() => {
+        const t = setup({ aggregation: 'full', tradesPerSec: 300 })
+        t.connect(1)
+        const resetAt = t.now()
+        reset(t, 100)
+        tickEvery(t, 100, 5_000)
+        return relative(tradesAfter(t, 0), resetAt)
+      })()
+      expect(other.slice(0, 50)).not.toEqual(relative(a.trades, a.resetAt).slice(0, 50))
+    })
+
+    it('starts round 1 at now at 50/50 with a fresh account and keeps seq increasing', () => {
+      const t = setup()
+      t.connect(1)
+      t.send(1, { type: 'dev', command: { kind: 'set_balance', usd: 3 } })
+      t.tickFor(65_000) // round 2 by now
+      t.advanceTo(t.now() + 50)
+      t.posted.length = 0
+      reset(t, 7)
+      // The old market is settled up to now first, so trades may precede the reset messages.
+      const [started, account] = t.messagesFor(1).slice(-2)
+      const before = t.server.getLastSeq() - 2
+      expect(started).toEqual({
+        type: 'round_started',
+        ts: t.now(),
+        round: { id: 1, startTs: t.now(), endTs: t.now() + DEFAULT_SERVER_CONFIG.roundMs },
+        price: 0.5,
+        seq: before + 1,
+      })
+      expect(account).toMatchObject({ type: 'account', seq: before + 2, account: { balance: START_BALANCE, roundId: 1, history: [] } })
+      const snapshot = t.server.getSnapshot()
+      expect(snapshot.seq).toBe(before + 2)
+      expect(snapshot.history).toEqual([{ time: Math.floor(t.now() / 1_000), value: 0.5 }])
+      expect(snapshot.userTrades).toEqual([])
+      t.tickFor(2_000)
+      const seqs = t.messagesFor(1).map((m) => m.seq)
+      seqs.forEach((seq, i) => expect(seq).toBe(before + 1 + i))
+    })
+
+    it('keeps trade ids increasing across a reset so clients never see a repeated id', () => {
+      const t = setup({ aggregation: 'full' })
+      t.connect(1)
+      t.tickFor(2_000)
+      const lastBefore = tradesAfter(t, 0).at(-1)?.id ?? 0
+      expect(lastBefore).toBeGreaterThan(0)
+      reset(t, 5)
+      const settled = tradesAfter(t, 0).at(-1)?.id ?? 0
+      const seq = t.server.getLastSeq()
+      t.tickFor(2_000)
+      expect(settled).toBeGreaterThanOrEqual(lastBefore)
+      expect(tradesAfter(t, seq)[0]?.id).toBe(settled + 1)
+    })
+
+    it('settles orders queued before the reset in the old market', () => {
+      const t = setup()
+      t.connect(1)
+      t.tickFor(500)
+      t.send(1, {
+        type: 'place_order',
+        clientOrderId: 'before-reset',
+        roundId: 1,
+        side: 'yes',
+        amountUsd: 10,
+        expectedPrice: 0.99,
+        maxSlippage: 0.1,
+      })
+      t.posted.length = 0
+      reset(t, 5)
+      const types = t.messagesFor(1).map((m) => m.type)
+      expect(types.indexOf('order_result')).toBeGreaterThanOrEqual(0)
+      expect(types.indexOf('order_result')).toBeLessThan(types.indexOf('round_started'))
+    })
+
+    it('keeps rate, aggregation, latency and drop settings', () => {
+      const t = setup()
+      t.connect(1)
+      t.send(1, { type: 'dev', command: { kind: 'set_rate', tradesPerSec: 2_000 } })
+      t.send(1, { type: 'dev', command: { kind: 'set_aggregation', mode: 'full' } })
+      t.send(1, { type: 'dev', command: { kind: 'set_batch_interval', ms: 50 } })
+      reset(t, 5)
+      expect(t.server.getBatchIntervalMs()).toBe(50)
+      const seq = t.server.getLastSeq()
+      t.tickFor(1_000)
+      const batches = t.messagesFor(1).flatMap((m) => (m.type === 'trades' && m.seq > seq ? [m] : []))
+      expect(batches.every((b) => b.aggregated === 'none')).toBe(true)
+      expect(batches.reduce((n, b) => n + b.items.length, 0)).toBeGreaterThan(1_500)
+      t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 200 } })
+      reset(t, 6)
+      t.posted.length = 0
+      t.deliveredAt.length = 0
+      t.tickFor(300)
+      const delivered = t.messagesFor(1)
+      expect(delivered.length).toBeGreaterThan(0)
+      delivered.forEach((m, i) => expect(t.deliveredAt[i] - m.ts).toBeGreaterThanOrEqual(200))
+    })
+
+    it('replays across the reset from the kept replay ring', () => {
+      const t = setup()
+      t.connect(1)
+      t.tickFor(1_000)
+      const from = t.server.getLastSeq() + 1
+      reset(t, 5)
+      t.tickFor(500)
+      const live = t.messagesFor(1).filter((m) => m.seq >= from)
+      t.posted.length = 0
+      t.send(1, { type: 'resync', fromSeq: from })
+      const replay = t.messagesFor(1)
+      expect(replay).toEqual(live)
+      expect(replay[0].type).toBe('round_started')
+    })
   })
 })

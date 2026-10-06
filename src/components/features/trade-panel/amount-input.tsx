@@ -32,7 +32,14 @@ export function AmountInput({ value, valid, onChange }: AmountInputProps) {
       </div>
       <div className="flex gap-2">
         {PRESETS.map((preset) => (
-          <Button key={preset} variant="subtle" size="sm" className="font-normal" onClick={() => onChange(preset)}>
+          <Button
+            key={preset}
+            variant="subtle"
+            size="sm"
+            className="font-normal"
+            data-testid={`ticket-amount-${preset}`}
+            onClick={() => onChange(preset)}
+          >
             ${preset}
           </Button>
         ))}

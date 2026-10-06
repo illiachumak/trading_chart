@@ -322,7 +322,7 @@ describe('AccountStore', () => {
     type: 'quote_result',
     seq,
     ts: 0,
-    quote: { status: 'unavailable', requestId, side: 'yes', amountUsd: 5 },
+    quote: { status: 'unavailable', requestId, side: 'yes', amountUsd: 5, maxSlippage: 0.03 },
   })
   const ORDER: OrderRequest = {
     clientOrderId: 'mine',
@@ -398,17 +398,66 @@ describe('AccountStore', () => {
     expect(account.placeOrder({ ...ORDER, clientOrderId: 'second' })).toBe('sent')
   })
 
-  it('shows only the answer to the latest quote request and clears it on a new round', () => {
+  const requestIdOf = (state: AccountStoreState): number | 'none' => {
+    const quote = selectQuote(state)
+    return quote === 'none' ? 'none' : quote.requestId
+  }
+
+  it('sends the tolerance with the quote request and applies answers in request order', () => {
     const { account, client } = attached()
-    account.requestQuote('yes', 5)
-    account.requestQuote('yes', 50)
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 50, 0.05)
     expect(client.sent.map((m) => (m.type === 'quote' ? m.requestId : -1))).toEqual([1, 2])
+    expect(client.sent[1]).toEqual({ type: 'quote', requestId: 2, side: 'yes', amountUsd: 50, maxSlippage: 0.05 })
     client.emit(quoteResult(1, 1))
-    expect(selectQuote(account.store.getState())).toBe('none')
+    expect(requestIdOf(account.store.getState())).toBe(1)
     client.emit(quoteResult(2, 2))
-    expect(selectQuote(account.store.getState())).toMatchObject({ requestId: 2 })
-    client.emit({ type: 'round_started', seq: 3, ts: 0, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(requestIdOf(account.store.getState())).toBe(2)
+  })
+
+  it('ignores an answer older than the last applied one', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 50, 0.03)
+    client.emit(quoteResult(1, 2))
+    client.emit(quoteResult(2, 1)) // overtaken: arrives after the newer answer
+    expect(requestIdOf(account.store.getState())).toBe(2)
+    client.emit(quoteResult(3, 2)) // a repeat of the applied one is not newer either
+    expect(requestIdOf(account.store.getState())).toBe(2)
+  })
+
+  it('ignores an id above the latest request (e.g. a bench probe answer)', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    client.emit(quoteResult(1, 1_000_000_000))
     expect(selectQuote(account.store.getState())).toBe('none')
+    client.emit(quoteResult(2, 1))
+    expect(requestIdOf(account.store.getState())).toBe(1)
+  })
+
+  it('applies an older answer while newer requests are in flight (RTT longer than the refresh interval)', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 5, 0.03)
+    client.emit(quoteResult(1, 1))
+    expect(requestIdOf(account.store.getState())).toBe(1)
+    client.emit(quoteResult(2, 3))
+    expect(requestIdOf(account.store.getState())).toBe(3)
+    client.emit(quoteResult(3, 2))
+    expect(requestIdOf(account.store.getState())).toBe(3)
+  })
+
+  it('clears the quote on a new round and forgets applied ids on reset', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    client.emit(quoteResult(1, 1))
+    client.emit({ type: 'round_started', seq: 2, ts: 0, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(selectQuote(account.store.getState())).toBe('none')
+    account.reset()
+    account.requestQuote('yes', 5, 0.03) // requestId 2; a fresh store must accept its answer
+    client.emit(quoteResult(3, 2))
+    expect(requestIdOf(account.store.getState())).toBe(2)
   })
 
   it('round_started clears a done order but keeps a pending one', () => {
@@ -457,25 +506,40 @@ describe('AccountStore', () => {
 })
 
 describe('pickQuoteFor / hasOkQuoteFor', () => {
-  const ok = { status: 'ok', requestId: 1, side: 'yes', amountUsd: 10, shares: 20, avgPrice: 0.5, cost: 10, potentialPayout: 20, potentialProfit: 10, clipped: false } as const
-  const unavailable = { status: 'unavailable', requestId: 2, side: 'yes', amountUsd: 10 } as const
+  const ok = {
+    status: 'ok',
+    requestId: 1,
+    side: 'yes',
+    amountUsd: 10,
+    shares: 20,
+    avgPrice: 0.5,
+    cost: 10,
+    potentialPayout: 20,
+    potentialProfit: 10,
+    clipped: false,
+    maxSlippage: 0.03,
+    worstAvgPrice: 0.53,
+    minShares: 10 / 0.53,
+  } as const
+  const unavailable = { status: 'unavailable', requestId: 2, side: 'yes', amountUsd: 10, maxSlippage: 0.03 } as const
   const withQuote = (quote: AccountStoreState['quote']): AccountStoreState => ({ account: 'loading', order: { kind: 'idle' }, quote })
 
   it('returns the quote for matching side and amount', () => {
-    expect(pickQuoteFor(withQuote(ok), 'yes', 10)).toBe(ok)
-    expect(hasOkQuoteFor(withQuote(ok), 'yes', 10)).toBe(true)
+    expect(pickQuoteFor(withQuote(ok), 'yes', 10, 0.03)).toBe(ok)
+    expect(hasOkQuoteFor(withQuote(ok), 'yes', 10, 0.03)).toBe(true)
   })
 
-  it('ignores other side or amount', () => {
-    expect(pickQuoteFor(withQuote(ok), 'no', 10)).toBe('none')
-    expect(pickQuoteFor(withQuote(ok), 'yes', 11)).toBe('none')
-    expect(hasOkQuoteFor(withQuote(ok), 'no', 10)).toBe(false)
+  it('ignores other side, amount or tolerance', () => {
+    expect(pickQuoteFor(withQuote(ok), 'yes', 10, 0.05)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'no', 10, 0.03)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 11, 0.03)).toBe('none')
+    expect(hasOkQuoteFor(withQuote(ok), 'no', 10, 0.03)).toBe(false)
   })
 
   it("is 'none' when unavailable, absent or the amount is invalid", () => {
-    expect(pickQuoteFor(withQuote('none'), 'yes', 10)).toBe('none')
-    expect(pickQuoteFor(withQuote(ok), 'yes', 'invalid')).toBe('none')
-    expect(pickQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(unavailable)
-    expect(hasOkQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(false)
+    expect(pickQuoteFor(withQuote('none'), 'yes', 10, 0.03)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 'invalid', 0.03)).toBe('none')
+    expect(pickQuoteFor(withQuote(unavailable), 'yes', 10, 0.03)).toBe(unavailable)
+    expect(hasOkQuoteFor(withQuote(unavailable), 'yes', 10, 0.03)).toBe(false)
   })
 })

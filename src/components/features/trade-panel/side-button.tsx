@@ -13,6 +13,7 @@ export function SideButton({ side, selected, onSelect }: SideButtonProps) {
     <button
       type="button"
       aria-pressed={selected}
+      data-testid={`ticket-side-${side}`}
       onClick={() => onSelect(side)}
       className={cn(
         'h-11 rounded-control border-hairline text-body font-semibold tabular-nums transition-colors',
