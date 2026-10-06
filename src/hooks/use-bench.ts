@@ -216,7 +216,7 @@ export function useBench(): BenchState | 'disabled' {
       setHarnessPhase('done')
       console.info('[bench]', JSON.stringify(output.kind === 'phases' ? output.results : output.result))
       const warning = seedWarning(
-        output.kind === 'phases' ? output.results : [{ phase: output.result.name, seedApplied: output.result.seedApplied }],
+        output.kind === 'phases' ? output.results : [{ phase: output.result.name, seed: output.result.seed, seedApplied: output.result.seedApplied }],
       )
       if (warning !== 'none') console.warn('[bench]', warning)
       setState({ kind: 'done', mode, output, seedWarning: warning })

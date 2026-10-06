@@ -662,15 +662,24 @@ describe('readCpuThrottleLabel', () => {
 describe('seedWarning', () => {
   it('names the phases whose seed was not applied', () => {
     const results = [
-      { phase: 'steady 30/s', seedApplied: true },
-      { phase: 'burst 1000/s', seedApplied: false },
-      { phase: 'stress 5000/s (limit)', seedApplied: false },
+      { phase: 'steady 30/s', seed: 30001, seedApplied: true },
+      { phase: 'burst 1000/s', seed: 1000001, seedApplied: false },
+      { phase: 'stress 5000/s (limit)', seed: 5000001, seedApplied: false },
     ]
     expect(seedWarning(results)).toBe('⚠ seed not applied: burst 1000/s, stress 5000/s (limit)')
   })
 
+  it('ignores live phases, which never apply a seed by design', () => {
+    const results = [
+      { phase: 'load 100/s', seed: 'live' as const, seedApplied: false },
+      { phase: 'burst 1000/s', seed: 1000001, seedApplied: false },
+    ]
+    expect(seedWarning(results)).toBe('⚠ seed not applied: burst 1000/s')
+    expect(seedWarning([{ phase: 'load 100/s', seed: 'live', seedApplied: false }])).toBe('none')
+  })
+
   it('is none when every seed was applied', () => {
-    expect(seedWarning([{ phase: 'steady 30/s', seedApplied: true }])).toBe('none')
+    expect(seedWarning([{ phase: 'steady 30/s', seed: 30001, seedApplied: true }])).toBe('none')
     expect(seedWarning([])).toBe('none')
   })
 })

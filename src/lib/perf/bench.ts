@@ -389,9 +389,14 @@ export function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
-/** One line naming the phases that ran unseeded (not reproducible), or 'none'. */
-export function seedWarning(results: readonly { phase: string; seedApplied: boolean }[]): string | 'none' {
-  const unseeded = results.filter((r) => !r.seedApplied).map((r) => r.phase)
+/**
+ * One line naming the seeded phases whose seed was not applied (not reproducible), or 'none'. Phases with
+ * seed 'live' (historical modes) never apply a seed by design, so they are not warned about.
+ */
+export function seedWarning(
+  results: readonly { phase: string; seed: number | 'live'; seedApplied: boolean }[],
+): string | 'none' {
+  const unseeded = results.filter((r) => r.seed !== 'live' && !r.seedApplied).map((r) => r.phase)
   return unseeded.length === 0 ? 'none' : `⚠ seed not applied: ${unseeded.join(', ')}`
 }
 

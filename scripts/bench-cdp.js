@@ -249,7 +249,8 @@ async (page) => {
     const run = {
       calibrationMs,
       clicks,
-      seedNotApplied: results.filter((r) => !r.seedApplied).map((r) => r.phase),
+      // 'live' phases (historical modes) never apply a seed by design; only seeded phases can fail to.
+      seedNotApplied: results.filter((r) => r.seed !== 'live' && !r.seedApplied).map((r) => r.phase),
       phases,
     }
     if (KEEP_RAW) run.raw = bench
