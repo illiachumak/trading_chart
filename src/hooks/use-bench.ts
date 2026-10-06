@@ -1,4 +1,4 @@
-// Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix`.
+// Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix|deep`.
 // Harness hooks: `<html data-bench-phase>` is the phase name only inside the measured window,
 // `warmup:<name>` before it, `settle` after it and `done` at the end, so an external CDP sampler can
 // align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.
@@ -7,7 +7,9 @@ import { useEffect, useState } from 'react'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import {
   type BenchPhaseResult,
+  type BenchScenario,
   type BenchTarget,
+  DEEP_SCENARIO,
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
   readHeapMb,
@@ -18,7 +20,7 @@ import type { MarketRuntime } from '@/lib/realtime/market-runtime'
 import { selectRound } from '@/lib/realtime/market-store'
 import type { OrderResult, QuoteResult, ServerMessage } from '@/lib/realtime/protocol'
 
-export type BenchMode = 'quick' | 'matrix'
+export type BenchMode = 'quick' | 'matrix' | 'deep'
 
 export type BenchState =
   | { kind: 'idle'; mode: BenchMode }
@@ -31,8 +33,10 @@ const LIVE_POLL_MS = 100
 
 function readMode(): BenchMode | 'disabled' {
   const value = new URLSearchParams(window.location.search).get('bench')
-  return value === 'quick' || value === 'matrix' ? value : 'disabled'
+  return value === 'quick' || value === 'matrix' || value === 'deep' ? value : 'disabled'
 }
+
+const SCENARIOS: Record<BenchMode, BenchScenario> = { quick: QUICK_SCENARIO, matrix: MATRIX_SCENARIO, deep: DEEP_SCENARIO }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -106,7 +110,7 @@ export function useBench(): BenchState | 'disabled' {
     if (mode === 'disabled') return
     let cancelled = false
     const release = perfMetrics.acquireSampling(browserSamplingEnv())
-    const scenario = mode === 'matrix' ? MATRIX_SCENARIO : QUICK_SCENARIO
+    const scenario = SCENARIOS[mode]
 
     const run = async (): Promise<void> => {
       while (runtime.client.getStatus() !== 'live') {

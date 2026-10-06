@@ -56,6 +56,12 @@ describe('parseClientMessage', () => {
       type: 'dev',
       command: { kind: 'set_batch_interval', ms: 33 },
     })
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_balance' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_balance', usd: '1000' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_balance', usd: 1000 } }))).toEqual({
+      type: 'dev',
+      command: { kind: 'set_balance', usd: 1000 },
+    })
     expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'force_disconnect' } }))).toEqual({
       type: 'dev',
       command: { kind: 'force_disconnect' },

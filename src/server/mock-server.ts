@@ -197,6 +197,12 @@ export class MockServer {
       case 'set_batch_interval':
         this.batchIntervalMs = clamp(command.ms, MIN_BATCH_INTERVAL_MS, MAX_BATCH_INTERVAL_MS)
         return
+      case 'set_balance': {
+        this.engine.setBalance(command.usd)
+        const ts = this.deps.now()
+        this.broadcast(this.publish({ type: 'account', ts, account: this.engine.getAccount() }))
+        return
+      }
       case 'force_disconnect':
         for (const connId of this.connections) this.deps.post({ kind: 'closed', connId })
         this.connections.clear()

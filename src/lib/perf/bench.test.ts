@@ -4,6 +4,7 @@ import {
   type BenchPhase,
   type BenchPhaseResult,
   type BenchTarget,
+  DEEP_SCENARIO,
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
   readHeapMb,
@@ -315,7 +316,7 @@ describe('runBench', () => {
     }
     const results = await run([{ ...BASE, probe: PROBE }, BASE], fake)
     expect(results).toBe('cancelled')
-    expect(fake.commands.map((c) => c.kind)).toEqual(['set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate'])
+    expect(fake.commands.map((c) => c.kind)).toEqual(['set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate', 'set_balance'])
     expect(fake.orders).toHaveLength(0)
   })
 })
@@ -362,5 +363,32 @@ describe('readHeapMb', () => {
 
   it('converts usedJSHeapSize to MB', () => {
     expect(readHeapMb({ memory: { usedJSHeapSize: 52_428_800 } })).toBe(50)
+  })
+})
+
+describe('set_balance and deep scenario', () => {
+  it('sends set_balance 1000 at the start of probe phases only', async () => {
+    const fake = fakeBench()
+    await runOk([{ ...BASE, durationMs: 2_000 }, { ...BASE, name: 'probed', group: 'slippage', durationMs: 2_000, probe: PROBE }], fake)
+    const balances = fake.commands.flatMap((c, i) => (c.kind === 'set_balance' ? [{ i, usd: c.usd }] : []))
+    expect(balances).toHaveLength(1)
+    expect(balances[0].usd).toBe(1_000)
+    expect(fake.commands.slice(balances[0].i - 4, balances[0].i).map((c) => c.kind)).toEqual([
+      'set_rate',
+      'set_batch_interval',
+      'set_latency',
+      'set_drop_rate',
+    ])
+  })
+
+  it('defines the deep scenario shape', () => {
+    const slip = DEEP_SCENARIO.phases.filter((p) => p.group === 'slippage')
+    const batch = DEEP_SCENARIO.phases.filter((p) => p.group === 'batch')
+    expect(slip).toHaveLength(36)
+    expect(batch.map((p) => p.batchMs)).toEqual([16, 33, 50, 100, 250])
+    expect(slip.every((p) => p.durationMs === 20_000 && p.batchMs === 100 && p.probe !== 'off' && p.probe.everyMs === 300)).toBe(true)
+    expect(batch.every((p) => p.durationMs === 15_000 && p.tradesPerSec === 500 && p.probe === 'off')).toBe(true)
+    expect(slip[0].name).toBe('slip 1¢ age 0ms @100/s')
+    expect(slip.some((p) => p.name === 'slip 3¢ age 250ms @500/s')).toBe(true)
   })
 })

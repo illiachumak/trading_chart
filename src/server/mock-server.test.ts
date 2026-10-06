@@ -82,6 +82,16 @@ describe('MockServer', () => {
     expect(setup({ batchIntervalMs: 50 }).server.getBatchIntervalMs()).toBe(50)
   })
 
+  it('set_balance publishes an account payload with the new balance', () => {
+    const t = setup()
+    t.connect(1)
+    t.send(1, { type: 'dev', command: { kind: 'set_balance', usd: 250 } })
+    const accounts = t.messagesFor(1).flatMap((m) => (m.type === 'account' ? [m.account] : []))
+    expect(accounts.at(-1)?.balance).toBe(250)
+    t.send(1, { type: 'dev', command: { kind: 'set_balance', usd: -5 } })
+    expect(t.messagesFor(1).flatMap((m) => (m.type === 'account' ? [m.account] : [])).at(-1)?.balance).toBe(250)
+  })
+
   it('acknowledges a connection', () => {
     const t = setup()
     t.connect(1)

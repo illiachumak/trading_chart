@@ -44,6 +44,29 @@ function ofType<T extends ServerPayload['type']>(
   return out.filter((p): p is Extract<ServerPayload, { type: T }> => p.type === type)
 }
 
+describe('MarketEngine.setBalance', () => {
+  it('overwrites the balance, ignoring negative and non-finite values', () => {
+    const engine = makeEngine()
+    engine.setBalance(40)
+    expect(engine.getAccount().balance).toBe(40)
+    engine.setBalance(-1)
+    engine.setBalance(Number.NaN)
+    expect(engine.getAccount().balance).toBe(40)
+    engine.setBalance(0)
+    expect(engine.getAccount().balance).toBe(0)
+  })
+
+  it('lets an order go through after a top-up', () => {
+    const engine = makeEngine()
+    engine.setBalance(0)
+    engine.enqueueOrder(1, order())
+    expect(ofType(engine.advance(2), 'order_result')[0].result).toMatchObject({ status: 'rejected', reason: 'insufficient_balance' })
+    engine.setBalance(1_000)
+    engine.enqueueOrder(3, order({ clientOrderId: 'o2' }))
+    expect(ofType(engine.advance(4), 'order_result')[0].result.status).toBe('filled')
+  })
+})
+
 describe('MarketEngine', () => {
   it('opens round 1 at 50% with a single start point', () => {
     const engine = makeEngine()

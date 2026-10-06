@@ -117,6 +117,10 @@ const MATRIX_PHASE_MS = 12_000
 const QUICK_PHASE_MS = 4_000
 const PROBE_AMOUNT_USD = 5
 const PROBE_EVERY_MS = 1_000
+const PROBE_START_BALANCE_USD = 1_000
+const DEEP_PROBE_EVERY_MS = 300
+const DEEP_SLIPPAGE_MS = 20_000
+const DEEP_BATCH_MS = 15_000
 
 const phase = (fields: Partial<BenchPhase> & Pick<BenchPhase, 'name' | 'group' | 'tradesPerSec'>): BenchPhase => ({
   batchMs: BATCH_INTERVAL_MS,
@@ -162,6 +166,30 @@ export const QUICK_SCENARIO: BenchScenario = {
   phases: MATRIX_PHASES.map((p) => ({ ...p, durationMs: QUICK_PHASE_MS })),
   warmupMs: 1_000,
 }
+
+const DEEP_RATES = [100, 500, 1_000] as const
+const DEEP_QUOTE_AGES_MS = [0, 250, 1_000] as const
+
+const DEEP_PHASES: readonly BenchPhase[] = [
+  ...DEEP_RATES.flatMap((rate) =>
+    SLIPPAGE_SWEEP.flatMap((slippage) =>
+      DEEP_QUOTE_AGES_MS.map((quoteAgeMs) =>
+        phase({
+          name: `slip ${Math.round(slippage * 100)}¢ age ${quoteAgeMs}ms @${rate}/s`,
+          group: 'slippage',
+          tradesPerSec: rate,
+          durationMs: DEEP_SLIPPAGE_MS,
+          probe: { slippage, amountUsd: PROBE_AMOUNT_USD, everyMs: DEEP_PROBE_EVERY_MS, quoteAgeMs },
+        }),
+      ),
+    ),
+  ),
+  ...BATCH_SWEEP_MS.map((ms) =>
+    phase({ name: `batch ${ms}ms @500/s`, group: 'batch', tradesPerSec: 500, batchMs: ms, durationMs: DEEP_BATCH_MS }),
+  ),
+]
+
+export const DEEP_SCENARIO: BenchScenario = { phases: DEEP_PHASES, warmupMs: 2_000 }
 
 // --- Helpers ---
 
@@ -272,6 +300,8 @@ function applySettings(p: BenchPhase, target: BenchTarget): void {
   target.sendDev({ kind: 'set_batch_interval', ms: p.batchMs })
   target.sendDev({ kind: 'set_latency', ms: p.latencyMs })
   target.sendDev({ kind: 'set_drop_rate', rate: p.dropRate })
+  // Probe orders spend cash; start every probe phase from the same balance.
+  if (p.probe !== 'off') target.sendDev({ kind: 'set_balance', usd: PROBE_START_BALANCE_USD })
 }
 
 export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promise<BenchPhaseResult[] | 'cancelled'> {

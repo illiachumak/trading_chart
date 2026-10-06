@@ -167,6 +167,16 @@ export class MarketEngine {
     return out
   }
 
+  /** Dev/bench helper: overwrites the cash balance. Non-finite or negative values are ignored. */
+  setBalance(usd: number): void {
+    if (Number.isFinite(usd) && usd >= 0) this.balance = usd
+  }
+
+  /** Current account state (what an `account` payload carries). */
+  getAccount(): Account {
+    return this.account()
+  }
+
   snapshot(now: number): SnapshotPayload {
     return {
       type: 'snapshot',
