@@ -166,11 +166,21 @@ export type BenchPhaseResult = {
   longTasks: number
   /** Longest long task inside the measured window. */
   longTaskMaxMs: number
+  /** The Long Animation Frames API is available; tells "unsupported" apart from other 'n/a' LoAF values. */
+  loafSupported: boolean
   /** Long Animation Frames per minute of window; 'n/a' where the API is unsupported (non-Chromium). */
   loafPerMin: number | 'n/a'
   loafMaxMs: number | 'n/a'
   loafBlockingMaxMs: number | 'n/a'
-  /** INP-style: interactions in the window (Event Timing, ≥16 ms entries only) and their p75 / max latency. */
+  /**
+   * The Event Timing API is available. With it, inpP75Ms 'n/a' means no interaction reached the 16 ms reporting
+   * threshold in the window; without it, INP cannot be measured at all.
+   */
+  inpSupported: boolean
+  /**
+   * INP-style: interactions in the window (Event Timing, ≥16 ms entries only) and their p75 / max latency.
+   * Event Timing durations are rounded to 8 ms, so values move in 8 ms steps.
+   */
   interactions: number
   inpP75Ms: number | 'n/a'
   inpMaxMs: number | 'n/a'
@@ -707,6 +717,8 @@ async function measurePhase(p: BenchPhase, seedApplied: boolean, deps: BenchDeps
       longTasks: snap.totals.longTasks - startTotals.longTasks,
       longTaskMaxMs: round2(snap.windowLongTaskMaxMs),
       ...loafWindow(snap, snap.totals.longAnimationFrames - startTotals.longAnimationFrames, elapsedMs),
+      loafSupported: snap.loafSupported,
+      inpSupported: snap.inpSupported,
       interactions: snap.interactions.count,
       inpP75Ms: optionalRound2(snap.interactions.p75Ms),
       inpMaxMs: optionalRound2(snap.interactions.maxMs),

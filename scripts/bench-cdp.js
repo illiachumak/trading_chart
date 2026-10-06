@@ -32,7 +32,7 @@
 //   { meta (incl. failedRuns), runs: [{ error } for a failed run | { calibrationMs, clicks, seedNotApplied, phases: { <phase>: {...} }, raw? }],
 //     summary: { <phase>: { <metric>: { mean, ci95, n } } } }
 // runs[].phases[phase] holds the key metrics only (number or 'n/a'):
-//   frameP95, pctFramesOverBudget, loafPerMin, inpP75 (+ interactions), dataAgeP95, commitsPerSec,
+//   frameP95, pctFramesOverBudget, loafPerMin (+ loafSupported), inpP75 (+ interactions, inpSupported), dataAgeP95, commitsPerSec,
 //   mainThreadBusyPct, scriptMsPerSec (from CDP), fillRate (slippage phases), recoveryP50 / recoveryMax (fault
 //   phases), seedApplied, and `cdp` — the full CDP aggregate for the window:
 //     wallSec, mainThreadBusyPct, scriptMsPerSec, layoutMsPerSec, styleMsPerSec, heapMaxMb
@@ -130,6 +130,9 @@ async (page) => {
       loafPerMin: r.loafPerMin,
       inpP75: r.inpP75Ms,
       interactions: r.interactions,
+      // false = the API is missing; true with 'n/a' = no ≥ 16 ms interaction / no LoAF in the window.
+      inpSupported: r.inpSupported,
+      loafSupported: r.loafSupported,
       dataAgeP95: r.dataAgeP95Ms,
       commitsPerSec: r.commitsPerSecTotal,
       mainThreadBusyPct: cdp ? cdp.mainThreadBusyPct : 'n/a',

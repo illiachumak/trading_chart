@@ -368,12 +368,29 @@ describe('runBench', () => {
     expect([result.frameP50Ms, result.frameP95Ms, result.frameP99Ms, result.pctFramesOverBudget]).toEqual([16.67, 40, 40, 33.33])
     expect([result.loafPerMin, result.loafMaxMs, result.loafBlockingMaxMs]).toEqual([12, 90, 45])
     expect([result.interactions, result.inpP75Ms, result.inpMaxMs]).toEqual([2, 64, 64])
+    expect([result.loafSupported, result.inpSupported]).toEqual([true, true])
+  })
+
+  it('tells an idle INP window apart from an unsupported API', async () => {
+    const fake = fakeBench()
+    const release = fake.deps.metrics.acquireSampling({
+      requestFrame: () => () => {},
+      observeLongTasks: () => () => {},
+      observeLongAnimationFrames: () => ({ supported: false, stop: () => {} }),
+      observeEventTiming: () => ({ supported: true, stop: () => {} }),
+    })
+    const [result] = await runOk([BASE], fake)
+    release()
+    // No interactions but Event Timing works: inpP75 'n/a' means "nothing ≥ 16 ms happened", not "unsupported".
+    expect([result.inpP75Ms, result.inpSupported]).toEqual(['n/a', true])
+    expect([result.loafPerMin, result.loafSupported]).toEqual(['n/a', false])
   })
 
   it('reports n/a for LoAF and INP when unsupported or idle', async () => {
     const [result] = await runOk([BASE], fakeBench())
     expect([result.loafPerMin, result.loafMaxMs, result.loafBlockingMaxMs]).toEqual(['n/a', 'n/a', 'n/a'])
     expect([result.interactions, result.inpP75Ms, result.inpMaxMs]).toEqual([0, 'n/a', 'n/a'])
+    expect([result.loafSupported, result.inpSupported]).toEqual([false, false])
   })
 
   it('probe alternates sides, counts fills and rejects and measures realized slippage in cents', async () => {
