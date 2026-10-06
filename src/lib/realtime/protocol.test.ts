@@ -85,6 +85,13 @@ describe('parseClientMessage', () => {
       type: 'dev',
       command: { kind: 'force_disconnect' },
     })
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market', seed: 42 } }))).toEqual({
+      type: 'dev',
+      command: { kind: 'reset_market', seed: 42 },
+    })
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market', seed: '42' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'reset_market', seed: 1.5 } }))).toBe('invalid')
   })
 })
 

@@ -84,6 +84,13 @@ export type DevCommand =
   /** Dev/bench only: overwrites the cash balance, which breaks the starting-capital invariant (START_BALANCE). */
   | { kind: 'set_balance'; usd: number }
   | { kind: 'force_disconnect' }
+  /**
+   * Dev/bench only: rebuilds the market (round 1 at now, 50/50, fresh account) and every random
+   * stream from `seed`, so the same seed replays the same trade sequence. Keeps rate, batch,
+   * latency, drop and aggregation settings; `seq` keeps increasing (the reset is announced on the
+   * normal stream as `round_started` + `account`).
+   */
+  | { kind: 'reset_market'; seed: number }
 
 export type PlaceOrder = {
   type: 'place_order'
@@ -193,6 +200,8 @@ function isDevCommand(value: unknown): value is DevCommand {
       return value.mode === 'full' || value.mode === 'compact'
     case 'set_balance':
       return typeof value.usd === 'number' && Number.isFinite(value.usd)
+    case 'reset_market':
+      return Number.isInteger(value.seed)
     case 'report_server_stats':
     case 'force_disconnect':
       return true
