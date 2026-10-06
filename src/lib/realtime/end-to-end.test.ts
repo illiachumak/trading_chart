@@ -16,6 +16,45 @@ afterEach(() => {
 })
 
 describe('client + mock server end to end', () => {
+  it('delivers quote answers to the ticket and to a probe on one connection when RTT exceeds the refresh interval', async () => {
+    const { worker } = createInProcessWorker(DEFAULT_SERVER_CONFIG, 7)
+    const client = new MarketClient({
+      createSocket: createWorkerSocketFactory(worker),
+      random: () => 0.5,
+      backoffBaseMs: 100,
+      backoffMaxMs: 1_000,
+      resyncTimeoutMs: 300,
+      maxPendingMessages: 5_000,
+    })
+    const account = new AccountStore()
+    account.attach(client)
+    const probeAnswers: number[] = []
+    client.onMessage((message) => {
+      if (message.type === 'quote_result' && message.quote.requestId >= 1_000_000_000) {
+        probeAnswers.push(message.quote.requestId)
+      }
+    })
+    client.start()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(client.getStatus()).toBe('live')
+    client.send({ type: 'dev', command: { kind: 'set_latency', ms: 600 } })
+    // Ticket refreshes every 250 ms while answers take 600 ms; a probe quote goes out on the same connection.
+    for (let i = 0; i < 8; i++) {
+      account.requestQuote('yes', 10, 0.03)
+      if (i === 2) client.send({ type: 'quote', requestId: 1_000_000_000, side: 'no', amountUsd: 5, maxSlippage: 0.05 })
+      await vi.advanceTimersByTimeAsync(250)
+    }
+    // Requests are still being superseded, yet an answer is already shown (no starvation).
+    const midStream = account.store.getState().quote
+    expect(midStream === 'none' ? 0 : midStream.requestId).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(1_000)
+    const quote = account.store.getState().quote
+    expect(quote === 'none' ? 0 : quote.requestId).toBe(8)
+    expect(probeAnswers).toEqual([1_000_000_000])
+    expect(client.stats.gaps).toBe(0)
+    client.stop()
+  })
+
   it('rebuilds the exact server chart through drops, latency and disconnects', async () => {
     const { worker, server, pause } = createInProcessWorker(DEFAULT_SERVER_CONFIG, 7)
     const client = new MarketClient({

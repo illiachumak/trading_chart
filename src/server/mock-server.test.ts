@@ -198,6 +198,25 @@ describe('MockServer', () => {
     expect(result).toMatchObject({ type: 'order_result', result: { clientOrderId: 'abc', status: 'filled' } })
   })
 
+  it('answers a quote only to the requesting connection, outside the sequenced stream', () => {
+    const t = setup()
+    t.connect(1)
+    t.connect(2)
+    t.send(1, { type: 'dev', command: { kind: 'report_server_stats' } }) // publishes one sequenced message
+    const seqBefore = t.messagesFor(2).at(-1)?.seq ?? 0
+    t.send(1, { type: 'quote', requestId: 9, side: 'no', amountUsd: 10, maxSlippage: 0.05 })
+    const quotes = t.messagesFor(1).filter((m) => m.type === 'quote_result')
+    expect(quotes).toHaveLength(1)
+    expect(quotes[0]).toMatchObject({ seq: seqBefore, quote: { requestId: 9, side: 'no', maxSlippage: 0.05 } })
+    expect(t.messagesFor(2).some((m) => m.type === 'quote_result')).toBe(false)
+    // The quote consumed no seq: the next published message follows the previous one directly.
+    t.send(2, { type: 'dev', command: { kind: 'report_server_stats' } })
+    expect(t.messagesFor(2).at(-1)?.seq).toBe(seqBefore + 1)
+    // Nor is it replayed on resync.
+    t.send(2, { type: 'resync', fromSeq: seqBefore })
+    expect(t.messagesFor(2).filter((m) => m.type === 'quote_result')).toHaveLength(0)
+  })
+
   it('force_disconnect closes the connection and stops delivery', () => {
     const t = setup()
     t.connect(1)

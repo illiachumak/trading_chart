@@ -1,5 +1,7 @@
 // Wire contract between the market backend (mock worker today, real WS later) and the client.
 // Every server message carries a monotonically increasing `seq` and the server `ts` (ms).
+// Exception: `quote_result` is a reply to the requesting connection only, outside the sequenced
+// stream; its `seq` is the server's last published seq at answer time and is not consumed.
 
 import { isRecord } from '@/lib/utils/is-record'
 
@@ -138,6 +140,7 @@ export type ServerPayload =
   | { type: 'round_started'; ts: number; round: RoundInfo; price: number }
   | { type: 'round_resolved'; ts: number; roundId: number; outcome: Side; payout: number }
   | { type: 'order_result'; ts: number; result: OrderResult }
+  /** Unsequenced per-connection reply (see the header comment). */
   | { type: 'quote_result'; ts: number; quote: QuoteResult }
   | { type: 'account'; ts: number; account: Account }
   | { type: 'heartbeat'; ts: number }

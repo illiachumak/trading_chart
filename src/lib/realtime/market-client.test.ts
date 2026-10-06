@@ -121,6 +121,28 @@ describe('MarketClient', () => {
     expect(client.getLastSeq()).toBe(12)
   })
 
+  it('delivers an unsequenced quote_result at once, without a gap, duplicate or seq change', () => {
+    const { fake, client, seen, goLive } = setup()
+    goLive(10)
+    const socket = fake.latest()
+    const quote = (seq: number): string =>
+      json({
+        type: 'quote_result',
+        seq,
+        ts: 1,
+        quote: { status: 'unavailable', requestId: 1, side: 'yes', amountUsd: 5, maxSlippage: 0.03 },
+      })
+    socket.handlers.onMessage(quote(10)) // seq = the server's lastSeq when it answered
+    socket.handlers.onMessage(quote(12)) // ahead of the stream (we have not seen 11 yet)
+    expect(seen).toEqual([10, 10, 12])
+    expect(client.getLastSeq()).toBe(10)
+    expect(client.stats.duplicates).toBe(0)
+    expect(client.stats.gaps).toBe(0)
+    expect(client.getStatus()).toBe('live')
+    socket.handlers.onMessage(heartbeat(11))
+    expect(client.getLastSeq()).toBe(11)
+  })
+
   it('counts received bytes (every raw message) and trades including aggregated ones', () => {
     const { fake, client, goLive } = setup()
     goLive(10)

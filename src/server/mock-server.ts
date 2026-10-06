@@ -245,7 +245,9 @@ export class MockServer {
         return
       }
       case 'quote':
-        this.broadcast(this.publish(this.engine.quote(now, message)))
+        // A reply to one connection, outside the sequenced stream: no seq is consumed and it is
+        // never replayed. It carries the current lastSeq only to satisfy the envelope.
+        this.send(connId, { ...this.engine.quote(now, message), seq: this.outbox.lastSeq })
         return
       case 'place_order':
         // Stamped with the server receive time; executed in ts order on the next tick.

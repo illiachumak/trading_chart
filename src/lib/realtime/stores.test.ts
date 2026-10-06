@@ -398,18 +398,66 @@ describe('AccountStore', () => {
     expect(account.placeOrder({ ...ORDER, clientOrderId: 'second' })).toBe('sent')
   })
 
-  it('shows only the answer to the latest quote request and clears it on a new round', () => {
+  const requestIdOf = (state: AccountStoreState): number | 'none' => {
+    const quote = selectQuote(state)
+    return quote === 'none' ? 'none' : quote.requestId
+  }
+
+  it('sends the tolerance with the quote request and applies answers in request order', () => {
     const { account, client } = attached()
     account.requestQuote('yes', 5, 0.03)
     account.requestQuote('yes', 50, 0.05)
     expect(client.sent.map((m) => (m.type === 'quote' ? m.requestId : -1))).toEqual([1, 2])
     expect(client.sent[1]).toEqual({ type: 'quote', requestId: 2, side: 'yes', amountUsd: 50, maxSlippage: 0.05 })
     client.emit(quoteResult(1, 1))
-    expect(selectQuote(account.store.getState())).toBe('none')
+    expect(requestIdOf(account.store.getState())).toBe(1)
     client.emit(quoteResult(2, 2))
-    expect(selectQuote(account.store.getState())).toMatchObject({ requestId: 2 })
-    client.emit({ type: 'round_started', seq: 3, ts: 0, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(requestIdOf(account.store.getState())).toBe(2)
+  })
+
+  it('ignores an answer older than the last applied one', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 50, 0.03)
+    client.emit(quoteResult(1, 2))
+    client.emit(quoteResult(2, 1)) // overtaken: arrives after the newer answer
+    expect(requestIdOf(account.store.getState())).toBe(2)
+    client.emit(quoteResult(3, 2)) // a repeat of the applied one is not newer either
+    expect(requestIdOf(account.store.getState())).toBe(2)
+  })
+
+  it('ignores an id above the latest request (e.g. a bench probe answer)', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    client.emit(quoteResult(1, 1_000_000_000))
     expect(selectQuote(account.store.getState())).toBe('none')
+    client.emit(quoteResult(2, 1))
+    expect(requestIdOf(account.store.getState())).toBe(1)
+  })
+
+  it('applies an older answer while newer requests are in flight (RTT longer than the refresh interval)', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 5, 0.03)
+    account.requestQuote('yes', 5, 0.03)
+    client.emit(quoteResult(1, 1))
+    expect(requestIdOf(account.store.getState())).toBe(1)
+    client.emit(quoteResult(2, 3))
+    expect(requestIdOf(account.store.getState())).toBe(3)
+    client.emit(quoteResult(3, 2))
+    expect(requestIdOf(account.store.getState())).toBe(3)
+  })
+
+  it('clears the quote on a new round and forgets applied ids on reset', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5, 0.03)
+    client.emit(quoteResult(1, 1))
+    client.emit({ type: 'round_started', seq: 2, ts: 0, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(selectQuote(account.store.getState())).toBe('none')
+    account.reset()
+    account.requestQuote('yes', 5, 0.03) // requestId 2; a fresh store must accept its answer
+    client.emit(quoteResult(3, 2))
+    expect(requestIdOf(account.store.getState())).toBe(2)
   })
 
   it('round_started clears a done order but keeps a pending one', () => {
