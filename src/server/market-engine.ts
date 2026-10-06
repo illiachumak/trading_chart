@@ -70,11 +70,17 @@ export class MarketEngine {
   private roundHistory: RoundResult[] = []
   private readonly orderResults = new Map<string, OrderResult>()
 
-  constructor(config: EngineConfig, deps: EngineDeps, now: number) {
+  /** `lastTradeId`: trade ids continue after it, so a market rebuilt in place never repeats an id. */
+  constructor(config: EngineConfig, deps: EngineDeps, now: number, lastTradeId = 0) {
     this.config = config
     this.deps = deps
     this.balance = config.startBalance
+    this.tradeCounter = lastTradeId
     this.round = this.openRound(1, now)
+  }
+
+  getLastTradeId(): number {
+    return this.tradeCounter
   }
 
   getRound(): RoundInfo {

@@ -47,6 +47,10 @@ export class ArrivalGenerator {
     this.nextTs = startTs + this.gap()
   }
 
+  getRate(): number {
+    return this.rate
+  }
+
   /** Takes effect immediately: Poisson arrivals are memoryless, so the pending gap is redrawn. */
   setRate(tradesPerSec: number): void {
     this.rate = clampRate(tradesPerSec)
