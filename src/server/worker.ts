@@ -1,0 +1,25 @@
+// Module worker entry: the only place in the mock backend that touches real timers and postMessage.
+
+import { BATCH_INTERVAL_MS, HEARTBEAT_INTERVAL_MS } from '@/config/market'
+import { isMainToWorker } from '@/lib/realtime/bridge'
+import { DEFAULT_SERVER_CONFIG, MockServer } from '@/server/mock-server'
+import { createRng } from '@/server/rng'
+
+const server = new MockServer(
+  {
+    post: (message) => postMessage(message),
+    now: () => Date.now(),
+    rng: createRng(Date.now()),
+    schedule: (fn, ms) => {
+      setTimeout(fn, ms)
+    },
+  },
+  DEFAULT_SERVER_CONFIG,
+)
+
+addEventListener('message', (event: MessageEvent<unknown>) => {
+  if (isMainToWorker(event.data)) server.onBridgeMessage(event.data)
+})
+
+setInterval(() => server.tick(), BATCH_INTERVAL_MS)
+setInterval(() => server.heartbeat(), HEARTBEAT_INTERVAL_MS)
