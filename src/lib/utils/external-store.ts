@@ -1,12 +1,14 @@
 // Minimal store compatible with React's useSyncExternalStore.
 
+/** Read side handed to React. Only the owning class keeps the writable handle. */
 export type ExternalStore<T> = {
   getState(): T
-  setState(next: T): void
   subscribe(listener: () => void): () => void
 }
 
-export function createExternalStore<T>(initial: T): ExternalStore<T> {
+export type WritableStore<T> = ExternalStore<T> & { setState(next: T): void }
+
+export function createExternalStore<T>(initial: T): WritableStore<T> {
   let state = initial
   const listeners = new Set<() => void>()
   return {
@@ -14,7 +16,8 @@ export function createExternalStore<T>(initial: T): ExternalStore<T> {
     setState(next) {
       if (Object.is(next, state)) return
       state = next
-      for (const listener of listeners) listener()
+      // Copy: a listener subscribing during notify must not be called for this change.
+      for (const listener of [...listeners]) listener()
     },
     subscribe(listener) {
       listeners.add(listener)

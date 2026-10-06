@@ -46,30 +46,38 @@ export const selectClockOffset = (s: MarketState): number => (s.phase === 'ready
 type Timer = ReturnType<typeof setTimeout>
 
 export class MarketStore {
-  readonly store: ExternalStore<MarketState>
+  private readonly writable = createExternalStore<MarketState>({ phase: 'loading', status: 'idle' })
+  readonly store: ExternalStore<MarketState> = this.writable
   private readonly options: MarketStoreOptions
-  private draft: MarketState = { phase: 'loading', status: 'idle' }
+  private draft: MarketState = this.writable.getState()
   private clock: ClockSync
   private lastPublishAt = Number.NEGATIVE_INFINITY
   private trailing: Timer | 'none' = 'none'
+  private detachClient: () => void = () => {}
 
   constructor(options: MarketStoreOptions) {
     this.options = options
     this.clock = new ClockSync(options.clockWindow)
-    this.store = createExternalStore(this.draft)
   }
 
+  /** Re-attaching replaces the previous client, so messages are never handled twice. */
   attach(client: Pick<MarketClient, 'onMessage' | 'onStatus'>): () => void {
+    this.detachClient()
     const offMessage = client.onMessage((message) => this.handle(message))
     const offStatus = client.onStatus((status) => {
-      this.draft = { ...this.draft, status }
+      // A stopped client starts over from a fresh snapshot; stale market data must not stay `ready`.
+      if (status === 'idle') this.draft = { phase: 'loading', status }
+      else this.draft = { ...this.draft, status }
       this.publishNow()
     })
-    return () => {
+    const detach = (): void => {
       offMessage()
       offStatus()
       this.cancelTrailing()
+      this.detachClient = () => {}
     }
+    this.detachClient = detach
+    return detach
   }
 
   reset(): void {
@@ -79,7 +87,9 @@ export class MarketStore {
   }
 
   handle(message: ServerMessage): void {
-    if (message.type === 'heartbeat') this.clock.observe(message.ts, this.options.now())
+    // Every message carries the server time; replayed (old) ones only lower a sample, and
+    // ClockSync keeps the max, so they never skew the estimate.
+    this.clock.observe(message.ts, this.options.now())
     if (message.type === 'snapshot') {
       this.draft = {
         phase: 'ready',
@@ -96,10 +106,11 @@ export class MarketStore {
     }
     const draft = this.draft
     if (draft.phase !== 'ready') return
+    const clockOffsetMs = this.clock.offsetMs
     switch (message.type) {
       case 'trades': {
         const last = message.items.at(-1)
-        if (last === undefined) return
+        if (last === undefined) break
         const userItems = message.items.filter((t) => t.source === 'user')
         this.draft = {
           ...draft,
@@ -109,28 +120,29 @@ export class MarketStore {
             this.options.recentTradesLimit,
           ),
           userTrades: userItems.length > 0 ? [...draft.userTrades, ...userItems] : draft.userTrades,
+          clockOffsetMs,
         }
         this.publishThrottled()
         return
       }
       case 'round_started':
-        this.draft = { ...draft, round: message.round, price: message.price, userTrades: EMPTY_TRADES }
+        this.draft = { ...draft, round: message.round, price: message.price, userTrades: EMPTY_TRADES, clockOffsetMs }
         this.publishNow()
         return
       case 'round_resolved':
-        this.draft = { ...draft, lastResolution: { roundId: message.roundId, outcome: message.outcome } }
+        this.draft = {
+          ...draft,
+          lastResolution: { roundId: message.roundId, outcome: message.outcome },
+          clockOffsetMs,
+        }
         this.publishNow()
         return
-      case 'heartbeat': {
-        const offset = this.clock.offsetMs
-        if (offset === draft.clockOffsetMs) return
-        this.draft = { ...draft, clockOffsetMs: offset }
-        this.publishThrottled()
-        return
-      }
       default:
-        return
+        break
     }
+    if (clockOffsetMs === draft.clockOffsetMs) return
+    this.draft = { ...draft, clockOffsetMs }
+    this.publishThrottled()
   }
 
   private cancelTrailing(): void {
@@ -141,7 +153,7 @@ export class MarketStore {
   private publishNow(): void {
     this.cancelTrailing()
     this.lastPublishAt = this.options.now()
-    this.store.setState(this.draft)
+    this.writable.setState(this.draft)
   }
 
   private publishThrottled(): void {

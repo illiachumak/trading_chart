@@ -58,9 +58,7 @@ describe('client + mock server end to end', () => {
     await vi.advanceTimersByTimeAsync(20_000)
     expect(client.getStatus()).toBe('live')
     // Place an order right before the first disconnect; it must be applied exactly once.
-    account.markPending('e2e-order')
-    client.send({
-      type: 'place_order',
+    account.placeOrder({
       clientOrderId: 'e2e-order',
       roundId: 1,
       side: 'yes',

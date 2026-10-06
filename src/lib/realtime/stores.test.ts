@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AccountStore, selectOrder, selectQuote } from '@/lib/realtime/account-store'
+import { AccountStore, type OrderRequest, selectOrder, selectQuote } from '@/lib/realtime/account-store'
 import { ClockSync } from '@/lib/realtime/clock-sync'
 import {
   MarketStore,
   selectPrice,
+  selectClockOffset,
   selectLastResolution,
   selectRecentTrades,
   selectRound,
   selectUserTrades,
 } from '@/lib/realtime/market-store'
-import type { ServerMessage, Trade } from '@/lib/realtime/protocol'
+import type { ConnectionStatus } from '@/lib/realtime/market-client'
+import type { ClientMessage, ServerMessage, Trade } from '@/lib/realtime/protocol'
 
 const ACCOUNT = {
   balance: 1_000,
@@ -41,6 +43,37 @@ const user = (id: number, priceAfter: number): Trade => ({
   clientOrderId: `o${id}`,
 })
 const trades = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items })
+
+/** Minimal client double: records sends and lets tests emit messages and status changes. */
+function fakeClient() {
+  const messageListeners = new Set<(message: ServerMessage) => void>()
+  const statusListeners = new Set<(status: ConnectionStatus) => void>()
+  const sent: ClientMessage[] = []
+  return {
+    sent,
+    onMessage: (listener: (message: ServerMessage) => void) => {
+      messageListeners.add(listener)
+      return () => {
+        messageListeners.delete(listener)
+      }
+    },
+    onStatus: (listener: (status: ConnectionStatus) => void) => {
+      statusListeners.add(listener)
+      return () => {
+        statusListeners.delete(listener)
+      }
+    },
+    send: (message: ClientMessage) => {
+      sent.push(message)
+    },
+    emit: (message: ServerMessage) => {
+      for (const listener of messageListeners) listener(message)
+    },
+    status: (status: ConnectionStatus) => {
+      for (const listener of statusListeners) listener(status)
+    },
+  }
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ now: 0 })
@@ -194,6 +227,59 @@ describe('MarketStore edge cases', () => {
   })
 })
 
+describe('MarketStore lifecycle', () => {
+  it('keeps the last resolution across a snapshot', () => {
+    const { market } = makeMarketStore()
+    market.handle(snapshot(1))
+    market.handle({ type: 'round_resolved', seq: 2, ts: 0, roundId: 1, outcome: 'no', payout: 0 })
+    market.handle(snapshot(5))
+    expect(selectLastResolution(market.store.getState())).toEqual({ roundId: 1, outcome: 'no' })
+  })
+
+  it('publishes status changes immediately, even inside a throttle window', () => {
+    const { market, publishes } = makeMarketStore()
+    const client = fakeClient()
+    market.attach(client)
+    market.handle(snapshot(1))
+    market.handle(trades(2, [mock(1, 0.55)]))
+    const before = publishes()
+    client.status('reconnecting')
+    expect(publishes() - before).toBe(1)
+    expect(market.store.getState().status).toBe('reconnecting')
+  })
+
+  it('goes back to loading when the client stops', () => {
+    const { market } = makeMarketStore()
+    const client = fakeClient()
+    market.attach(client)
+    client.status('live')
+    market.handle(snapshot(1))
+    client.status('idle')
+    expect(market.store.getState()).toEqual({ phase: 'loading', status: 'idle' })
+  })
+
+  it('handles each message once when attached twice', () => {
+    const { market } = makeMarketStore()
+    const client = fakeClient()
+    market.attach(client)
+    market.attach(client)
+    client.emit(snapshot(1))
+    client.emit(trades(2, [user(1, 0.48)]))
+    vi.advanceTimersByTime(300)
+    expect(selectUserTrades(market.store.getState())).toHaveLength(1)
+  })
+
+  it('estimates the clock offset from trade batches, not only heartbeats', () => {
+    const { market } = makeMarketStore()
+    market.handle(snapshot(1))
+    vi.advanceTimersByTime(1_000)
+    // Server clock is 5 s ahead: ts = local now + 5000.
+    market.handle({ type: 'trades', seq: 2, ts: 6_000, items: [mock(1, 0.5)] })
+    vi.advanceTimersByTime(300)
+    expect(selectClockOffset(market.store.getState())).toBe(5_000)
+  })
+})
+
 describe('ClockSync', () => {
   it('estimates the offset from the fastest sample', () => {
     const clock = new ClockSync(5)
@@ -217,31 +303,79 @@ describe('ClockSync', () => {
 })
 
 describe('AccountStore', () => {
-  it('tracks account, quote and only the pending order result', () => {
+  const filled = (seq: number, clientOrderId: string): ServerMessage => ({
+    type: 'order_result',
+    seq,
+    ts: 0,
+    result: { status: 'filled', clientOrderId, side: 'yes', shares: 10, avgPrice: 0.5, cost: 5, refund: 0 },
+  })
+  const quoteResult = (seq: number, requestId: number): ServerMessage => ({
+    type: 'quote_result',
+    seq,
+    ts: 0,
+    quote: { status: 'unavailable', requestId, side: 'yes', amountUsd: 5 },
+  })
+  const ORDER: OrderRequest = {
+    clientOrderId: 'mine',
+    roundId: 1,
+    side: 'yes',
+    amountUsd: 5,
+    expectedPrice: 0.5,
+    maxSlippage: 0.02,
+  }
+
+  function attached() {
     const account = new AccountStore()
-    account.handle(snapshot(1))
+    const client = fakeClient()
+    account.attach(client)
+    return { account, client }
+  }
+
+  it('tracks the account and resolves only the pending order', () => {
+    const { account, client } = attached()
+    client.emit(snapshot(1))
     expect(account.store.getState().account).toEqual(ACCOUNT)
-    account.markPending('mine')
-    account.handle({
+    expect(account.placeOrder(ORDER)).toBe('sent')
+    expect(client.sent).toEqual([{ type: 'place_order', ...ORDER }])
+    client.emit({
       type: 'order_result',
       seq: 2,
       ts: 0,
       result: { status: 'rejected', clientOrderId: 'other', side: 'yes', reason: 'slippage', currentPrice: 0.5 },
     })
     expect(selectOrder(account.store.getState())).toEqual({ kind: 'pending', clientOrderId: 'mine' })
-    account.handle({
-      type: 'order_result',
-      seq: 3,
-      ts: 0,
-      result: { status: 'filled', clientOrderId: 'mine', side: 'yes', shares: 10, avgPrice: 0.5, cost: 5, refund: 0 },
-    })
+    client.emit(filled(3, 'mine'))
     expect(selectOrder(account.store.getState())).toMatchObject({ kind: 'done', result: { clientOrderId: 'mine' } })
-    account.handle({
-      type: 'quote_result',
-      seq: 4,
-      ts: 0,
-      quote: { status: 'unavailable', requestId: 1, side: 'yes', amountUsd: 5 },
-    })
-    expect(selectQuote(account.store.getState())).toMatchObject({ requestId: 1 })
+  })
+
+  it('refuses a second order while one is in flight', () => {
+    const { account, client } = attached()
+    account.placeOrder(ORDER)
+    expect(account.placeOrder({ ...ORDER, clientOrderId: 'second' })).toBe('busy')
+    expect(client.sent).toHaveLength(1)
+    client.emit(filled(2, 'mine'))
+    expect(account.placeOrder({ ...ORDER, clientOrderId: 'second' })).toBe('sent')
+  })
+
+  it('shows only the answer to the latest quote request and clears it on a new round', () => {
+    const { account, client } = attached()
+    account.requestQuote('yes', 5)
+    account.requestQuote('yes', 50)
+    expect(client.sent.map((m) => (m.type === 'quote' ? m.requestId : -1))).toEqual([1, 2])
+    client.emit(quoteResult(1, 1))
+    expect(selectQuote(account.store.getState())).toBe('none')
+    client.emit(quoteResult(2, 2))
+    expect(selectQuote(account.store.getState())).toMatchObject({ requestId: 2 })
+    client.emit({ type: 'round_started', seq: 3, ts: 0, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(selectQuote(account.store.getState())).toBe('none')
+  })
+
+  it('resets when the client stops and refuses to send while detached', () => {
+    const { account, client } = attached()
+    client.emit(snapshot(1))
+    account.placeOrder(ORDER)
+    client.status('idle')
+    expect(account.store.getState()).toEqual({ account: 'loading', order: { kind: 'idle' }, quote: 'none' })
+    expect(() => new AccountStore().placeOrder(ORDER)).toThrow('not attached')
   })
 })
