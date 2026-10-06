@@ -13,6 +13,7 @@ import {
   readCpuThrottleLabel,
   readHeapMb,
   runBench,
+  seedWarning,
 } from '@/lib/perf/bench'
 import { PerfMetrics } from '@/lib/perf/perf-metrics'
 import type { ClientStats, ConnectionStatus } from '@/lib/realtime/market-client'
@@ -652,6 +653,22 @@ describe('readCpuThrottleLabel', () => {
     expect(readCpuThrottleLabel('?bench=realistic&cpu=%20')).toBe('none')
     expect(readCpuThrottleLabel('?bench=realistic')).toBe('none')
     expect(readCpuThrottleLabel(`?cpu=${'x'.repeat(100)}`)).toHaveLength(32)
+  })
+})
+
+describe('seedWarning', () => {
+  it('names the phases whose seed was not applied', () => {
+    const results = [
+      { phase: 'steady 30/s', seedApplied: true },
+      { phase: 'burst 1000/s', seedApplied: false },
+      { phase: 'stress 5000/s (limit)', seedApplied: false },
+    ]
+    expect(seedWarning(results)).toBe('⚠ seed not applied: burst 1000/s, stress 5000/s (limit)')
+  })
+
+  it('is none when every seed was applied', () => {
+    expect(seedWarning([{ phase: 'steady 30/s', seedApplied: true }])).toBe('none')
+    expect(seedWarning([])).toBe('none')
   })
 })
 

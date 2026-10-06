@@ -25,6 +25,7 @@ import {
   readCpuThrottleLabel,
   readHeapMb,
   runBench,
+  seedWarning,
 } from '@/lib/perf/bench'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
 import { type SoakResult, SOAK_CONFIG, runSoak } from '@/lib/perf/soak'
@@ -41,7 +42,8 @@ export type BenchOutput = { kind: 'phases'; results: BenchPhaseResult[] } | { ki
 export type BenchState =
   | { kind: 'idle'; mode: BenchMode }
   | { kind: 'running'; mode: BenchMode; phase: string; index: number; total: number }
-  | { kind: 'done'; mode: BenchMode; output: BenchOutput }
+  /** `seedWarning` names phases that ran unseeded (their numbers are not reproducible), or 'none'. */
+  | { kind: 'done'; mode: BenchMode; output: BenchOutput; seedWarning: string | 'none' }
 
 const QUOTE_TIMEOUT_MS = 2_000
 const ORDER_TIMEOUT_MS = 3_000
@@ -213,7 +215,11 @@ export function useBench(): BenchState | 'disabled' {
       if (output === 'cancelled' || cancelled) return
       setHarnessPhase('done')
       console.info('[bench]', JSON.stringify(output.kind === 'phases' ? output.results : output.result))
-      setState({ kind: 'done', mode, output })
+      const warning = seedWarning(
+        output.kind === 'phases' ? output.results : [{ phase: output.result.name, seedApplied: output.result.seedApplied }],
+      )
+      if (warning !== 'none') console.warn('[bench]', warning)
+      setState({ kind: 'done', mode, output, seedWarning: warning })
     }
     void run()
 

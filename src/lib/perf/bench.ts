@@ -389,6 +389,12 @@ export function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+/** One line naming the phases that ran unseeded (not reproducible), or 'none'. */
+export function seedWarning(results: readonly { phase: string; seedApplied: boolean }[]): string | 'none' {
+  const unseeded = results.filter((r) => !r.seedApplied).map((r) => r.phase)
+  return unseeded.length === 0 ? 'none' : `⚠ seed not applied: ${unseeded.join(', ')}`
+}
+
 const MAX_CPU_LABEL_LENGTH = 32
 
 /** `&cpu=` label from a query string (metadata only: says how the tester throttled the CPU); 'none' when absent. */

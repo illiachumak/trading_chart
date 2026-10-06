@@ -38,6 +38,11 @@ export function BenchPanel() {
               ? `Benchmark done · ${bench.output.results.length} phases`
               : `Soak done · ${bench.output.result.samples.length} samples`}
           </p>
+          {bench.seedWarning !== 'none' && (
+            <p className="text-warn" data-testid="bench-seed-warning">
+              {bench.seedWarning}
+            </p>
+          )}
           <pre data-testid="bench-result" className="min-h-0 overflow-auto whitespace-pre-wrap text-fg-secondary">
             {JSON.stringify(bench.output.kind === 'phases' ? bench.output.results : bench.output.result, null, 2)}
           </pre>
