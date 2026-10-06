@@ -1,1 +1,28 @@
 @import 'tailwindcss';
+
+@theme {
+  --color-canvas: #0e1217;
+  --color-surface: #161b22;
+  --color-surface-raised: #1d232c;
+  --color-border: #2a313c;
+  --color-fg: #e6edf3;
+  --color-muted: #8b949e;
+  --color-yes: #3fb950;
+  --color-yes-soft: #3fb95026;
+  --color-no: #f85149;
+  --color-no-soft: #f8514926;
+  --color-accent: #2f81f7;
+  --color-warn: #d29922;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas font-sans text-fg antialiased;
+}
