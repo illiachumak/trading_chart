@@ -62,7 +62,7 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
         fontFamily: CHART_FONT,
         attributionLogo: false,
       },
-      grid: { vertLines: { visible: false }, horzLines: { color: CHART_COLORS.grid } },
+      grid: { vertLines: { visible: false }, horzLines: { color: CHART_COLORS.grid, style: LineStyle.Dotted } },
       rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.05, bottom: 0.05 } },
       timeScale: {
         borderVisible: false,
@@ -87,9 +87,9 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
       price: 0.5,
       color: CHART_COLORS.baseline,
       lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-      axisLabelVisible: false,
-      title: '',
+      lineStyle: LineStyle.Dotted,
+      axisLabelVisible: true,
+      title: '50%',
     })
     const markers = createSeriesMarkers(series, [])
 

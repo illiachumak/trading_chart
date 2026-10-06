@@ -1,28 +1,100 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
 
 @theme {
-  --color-canvas: #0e1217;
-  --color-surface: #161b22;
-  --color-surface-raised: #1d232c;
-  --color-border: #2a313c;
-  --color-fg: #e6edf3;
-  --color-muted: #8b949e;
-  --color-yes: #3fb950;
-  --color-yes-soft: #3fb95026;
-  --color-no: #f85149;
-  --color-no-soft: #f8514926;
-  --color-accent: #2f81f7;
-  --color-warn: #d29922;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  /* Neutrals (Morfi gray scale, dark theme) */
+  --color-canvas: #121212;          /* gray-900: page */
+  --color-surface: #1b1b1b;         /* gray-800: cards */
+  --color-surface-raised: #2b2b2b;  /* gray-700: inputs, chips, raised rows */
+  --color-border: #2b2b2b;          /* gray-700: hairline borders */
+  --color-fg: #fafafa;              /* gray-50: primary text */
+  --color-fg-secondary: #cacaca;    /* gray-300 */
+  --color-muted: #a3a3a3;           /* gray-400: tertiary text */
+  --color-subtle: #707070;          /* gray-500: disabled / axis */
+
+  /* Outcomes */
+  --color-yes: #56d042;             /* outcome-green-400 */
+  --color-yes-soft: #56d04226;      /* 15% fill */
+  --color-yes-strong: #163d10;      /* outcome-green-900: CTA bg (dark) */
+  --color-no: #ff7e66;              /* outcome-red-400 */
+  --color-no-soft: #ff7e6626;
+  --color-no-strong: #561f15;       /* outcome-red-900 */
+
+  /* Brand */
+  --color-accent: #2058ec;          /* brand-500 */
+  --color-brand-text: #7a9fed;      /* brand-300: eyebrows, links, highlighted words */
+  --color-brand-surface: #02103e;   /* brand-950 */
+  --color-brand-border: #06288e;    /* brand-800 */
+  --color-warn: #ec9400;            /* outcome-amber-400 */
+  --color-cyan: #00dad9;            /* outcome-cyan-300: chart line */
+
+  /* Type */
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, monospace;
+  --text-caption: 0.75rem;   --text-caption--line-height: 1rem;
+  --text-body: 0.875rem;     --text-body--line-height: 1.25rem;
+  --text-body-lg: 1rem;      --text-body-lg--line-height: 1.5rem;
+  --text-heading: 1.25rem;   --text-heading--line-height: 1.75rem;  --text-heading--font-weight: 600; --text-heading--letter-spacing: -0.02em;
+  --text-heading-lg: 1.5rem; --text-heading-lg--line-height: 2rem;  --text-heading-lg--font-weight: 600; --text-heading-lg--letter-spacing: -0.02em;
+  --text-display: 2.5rem;    --text-display--line-height: 2.75rem;  --text-display--font-weight: 700; --text-display--letter-spacing: -0.025em;
+
+  /* Shape */
+  --radius-card: 1.25rem;
+  --radius-control: 0.75rem;
+  --radius-overlay: 0.75rem;
+  --radius-pill: 9999px;
+
+  /* Elevation (dark) */
+  --shadow-card: inset 0 1px 0 0 #ffffff0d, inset 0 0 0 1px #ffffff05, 0 0 0 1px #0000001f, 0 1px 1px -0.5px #0000002e, 0 3px 3px -1.5px #0000002e;
+  --shadow-sticky: inset 0 1px 0 0 #ffffff14, inset 0 0 0 1px #ffffff0a, 0 0 0 1px #00000029, 0 1px 1px -0.5px #0000002e, 0 3px 3px -1.5px #0000002e, 0 6px 6px -3px #0000002e, 0 12px 12px -6px #0000002e;
 }
 
-html,
-body,
-#root {
-  height: 100%;
+@utility border-hairline {
+  border-style: solid;
+  border-width: 0.5px;
 }
 
-body {
-  @apply bg-canvas font-sans text-fg antialiased;
+/* Card shell used by every panel */
+@utility card {
+  border-radius: var(--radius-card);
+  border: 0.5px solid var(--color-border);
+  background-color: var(--color-surface);
+  box-shadow: var(--shadow-card);
 }
+
+/* Small uppercase section label (Morfi "HOW IT WORKS") */
+@utility eyebrow {
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  color: var(--color-brand-text);
+}
+
+/* Primary CTA: blue gradient with inner highlight and glow */
+@utility btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.5rem;
+  padding: 0 1.375rem;
+  border-radius: 1rem;
+  color: #fff;
+  font-size: var(--text-body);
+  font-weight: 500;
+  letter-spacing: 0.00625rem;
+  background: linear-gradient(#1f78ff 0%, #005deb 100%);
+  box-shadow: inset 0 1px #ffffff59, inset 0 -12px 24px #00286e59, 0 18px 50px -12px #005deb99;
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.35s;
+}
+
+/* Subtle dotted texture behind illustrations / chart */
+@utility dot-grid {
+  background-image: radial-gradient(#ffffff14 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-canvas font-sans text-fg antialiased; }

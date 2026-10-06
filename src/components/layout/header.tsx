@@ -3,11 +3,12 @@ import { ModeTabs } from '@/components/layout/mode-tabs'
 
 export function Header() {
   return (
-    <header className="border-b border-border bg-surface">
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+    // Hairline only on the bottom edge: `border-hairline` would set all four sides.
+    <header className="sticky top-0 z-10 border-b-[0.5px] border-border bg-canvas/80 backdrop-blur">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-8">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-lg font-semibold">Coinflip</h1>
-          <span className="hidden text-sm text-muted sm:inline">Will this round resolve YES?</span>
+          <h1 className="text-heading">Coinflip</h1>
+          <span className="hidden text-body text-muted sm:inline">Will this round resolve YES?</span>
         </div>
         <div className="flex items-center gap-3">
           <ModeTabs />
