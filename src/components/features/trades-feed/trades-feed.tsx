@@ -5,6 +5,8 @@ import type { Trade } from '@/lib/realtime/protocol'
 import { formatCents, formatClock, formatShares } from '@/lib/utils/format'
 import { SIDE_LABEL } from '@/lib/utils/side-label'
 
+/** Row height is h-8 (2rem) exactly, so the 24rem list shows whole rows only. */
+const VISIBLE_TRADES = 12
 const GRID = 'grid grid-cols-[3rem_1fr_4.5rem_4.5rem] gap-2'
 
 export function TradesFeed() {
@@ -18,8 +20,8 @@ export function TradesFeed() {
         <span className="text-right">YES after</span>
         <span className="text-right">Time</span>
       </div>
-      <ul className="h-[22rem] overflow-hidden" data-testid="trades-feed">
-        {trades.map((trade) => (
+      <ul className="h-[24rem] overflow-hidden" data-testid="trades-feed">
+        {trades.slice(0, VISIBLE_TRADES).map((trade) => (
           <TradeRow key={trade.id} trade={trade} />
         ))}
       </ul>
@@ -30,7 +32,7 @@ export function TradesFeed() {
 // Rows keep identity across publishes, so only new rows render.
 const TradeRow = memo(function TradeRow({ trade }: { trade: Trade }) {
   return (
-    <li className={`${GRID} items-center border-b-hairline border-border px-1 py-1.5 text-body tabular-nums last:border-b-0`}>
+    <li className={`${GRID} h-8 items-center border-b-hairline border-border px-1 text-body tabular-nums last:border-b-0`}>
       <span className={trade.side === 'yes' ? 'font-medium text-yes' : 'font-medium text-no'}>
         {SIDE_LABEL[trade.side]}
       </span>

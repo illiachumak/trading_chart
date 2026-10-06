@@ -1,10 +1,8 @@
 import { useAccount } from '@/hooks/use-market'
-import { selectAccount } from '@/lib/realtime/account-store'
+import { selectRoundHistory } from '@/lib/realtime/account-store'
 import type { RoundResult } from '@/lib/realtime/protocol'
 import { formatSignedUsd } from '@/lib/utils/format'
 import { SIDE_LABEL } from '@/lib/utils/side-label'
-
-const EMPTY: readonly RoundResult[] = []
 
 function pnlClass(round: RoundResult): string {
   if (round.spent <= 0) return 'text-muted'
@@ -12,15 +10,14 @@ function pnlClass(round: RoundResult): string {
 }
 
 export function RoundHistory() {
-  const account = useAccount(selectAccount)
-  const history = account === 'loading' ? EMPTY : account.history
+  const history = useAccount(selectRoundHistory)
   return (
     <section className="card p-4 md:p-5">
       <h2 className="eyebrow mb-3">Round history</h2>
       {history.length === 0 ? (
         <p className="text-body text-muted">No rounds resolved yet</p>
       ) : (
-        <ul className="text-body tabular-nums">
+        <ul className="max-h-[20rem] overflow-y-auto text-body tabular-nums">
           {history.map((round) => (
             <li
               key={round.roundId}
