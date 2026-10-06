@@ -2,8 +2,8 @@ import { useCallback, useRef } from 'react'
 import { type HudField, usePerfHud } from '@/hooks/use-perf-hud'
 
 const ROWS: readonly { field: HudField; label: string }[] = [
-  { field: 'fps', label: 'FPS' },
-  { field: 'frame', label: 'Frame p50/p95' },
+  { field: 'frame', label: 'Frame p95' },
+  { field: 'display', label: 'Display' },
   { field: 'flush', label: 'Flush p50/p95/max' },
   { field: 'dataAge', label: 'Data age p50/p95' },
   { field: 'ticks', label: 'Ticks per flush' },
@@ -12,6 +12,7 @@ const ROWS: readonly { field: HudField; label: string }[] = [
   { field: 'items', label: 'Items shipped' },
   { field: 'kb', label: 'KB/s' },
   { field: 'commits', label: 'Commits/s' },
+  { field: 'loaf', label: 'LoAF' },
   { field: 'longTasks', label: 'Long tasks' },
   { field: 'net', label: 'Network' },
 ]

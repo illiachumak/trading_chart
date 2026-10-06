@@ -2,12 +2,28 @@
 // so the HUD itself causes zero React commits.
 
 import { useEffect } from 'react'
-import { HUD_REFRESH_MS } from '@/config/market'
+import { FRAME_BUDGET_MS, HUD_REFRESH_MS } from '@/config/market'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
-import { ratesPerSecond } from '@/lib/perf/rates'
+import { type CountSample, ratesPerSecond, trailingPerMinute } from '@/lib/perf/rates'
 
-export type HudField = 'fps' | 'frame' | 'flush' | 'dataAge' | 'ticks' | 'msgs' | 'trades' | 'items' | 'kb' | 'commits' | 'longTasks' | 'net'
+export type HudField =
+  | 'frame'
+  | 'display'
+  | 'loaf'
+  | 'flush'
+  | 'dataAge'
+  | 'ticks'
+  | 'msgs'
+  | 'trades'
+  | 'items'
+  | 'kb'
+  | 'commits'
+  | 'longTasks'
+  | 'net'
+
+/** LoAF/min is averaged over this trailing window. */
+const LOAF_RATE_WINDOW_MS = 60_000
 
 export function usePerfHud(write: (field: HudField, text: string) => void): void {
   const runtime = useMarketRuntime()
@@ -17,6 +33,7 @@ export function usePerfHud(write: (field: HudField, text: string) => void): void
     let previousStats = { ...runtime.client.stats }
     let previousCommits = perfMetrics.snapshot().totals.commits
     let previousAt = performance.now()
+    const loafSamples: CountSample[] = [{ at: previousAt, total: perfMetrics.snapshot().totals.longAnimationFrames }]
 
     const timer = setInterval(() => {
       const now = performance.now()
@@ -30,8 +47,11 @@ export function usePerfHud(write: (field: HudField, text: string) => void): void
       )
       const commitRates = ratesPerSecond(snap.totals.commits, previousCommits, elapsed)
 
-      write('fps', String(snap.fps))
-      write('frame', `${snap.frameP50.toFixed(1)} / ${snap.frameP95.toFixed(1)} ms`)
+      const loafPerMin = trailingPerMinute(loafSamples, { at: now, total: snap.totals.longAnimationFrames }, LOAF_RATE_WINDOW_MS)
+
+      write('frame', `${snap.frameP95.toFixed(1)} ms · ${snap.pctFramesOverBudget.toFixed(1)}% >${FRAME_BUDGET_MS}`)
+      write('display', `${snap.displayHz === 'n/a' ? '—' : `${snap.displayHz} Hz`} · ${snap.fps} fps`)
+      write('loaf', snap.loafSupported ? `${loafPerMin.toFixed(1)}/min` : 'n/a')
       write('flush', `${snap.flushP50.toFixed(2)} / ${snap.flushP95.toFixed(2)} / ${snap.flushMax.toFixed(2)} ms`)
       write('dataAge', `${snap.dataAgeP50.toFixed(0)} / ${snap.dataAgeP95.toFixed(0)} ms`)
       write('ticks', `${snap.ticksPerFlushP50} / flush · setData ${snap.totals.setDataFlushes}`)
