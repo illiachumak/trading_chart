@@ -138,14 +138,22 @@ export function browserSamplingEnv(): SamplingEnv {
       return () => cancelAnimationFrame(handle)
     },
     observeLongTasks(onTask) {
-      if (typeof PerformanceObserver === 'undefined' || !PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+      if (
+        typeof PerformanceObserver === 'undefined' ||
+        !Array.isArray(PerformanceObserver.supportedEntryTypes) ||
+        !PerformanceObserver.supportedEntryTypes.includes('longtask')
+      ) {
         return () => {}
       }
-      const observer = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) onTask(entry.duration)
-      })
-      observer.observe({ type: 'longtask' })
-      return () => observer.disconnect()
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) onTask(entry.duration)
+        })
+        observer.observe({ type: 'longtask' })
+        return () => observer.disconnect()
+      } catch {
+        return () => {}
+      }
     },
   }
 }
