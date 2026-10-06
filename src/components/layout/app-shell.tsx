@@ -1,3 +1,4 @@
+import { BENCH_AVAILABLE } from '@/config/bench'
 import { BenchPanel } from '@/components/features/dev-tools/bench-panel'
 import { DevPanel } from '@/components/features/dev-tools/dev-panel'
 import { PriceChart } from '@/components/features/chart/price-chart'
@@ -44,7 +45,7 @@ export function AppShell() {
       </Container>
       <ErrorBoundary name="dev-tools">
         <DevPanel />
-        <BenchPanel />
+        {BENCH_AVAILABLE && <BenchPanel />}
       </ErrorBoundary>
     </div>
   )

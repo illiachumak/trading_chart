@@ -35,7 +35,7 @@ export type ProbeResult = {
   rejected: Record<RejectReason, number>
   /** No result within the order timeout. */
   timeouts: number
-  /** Probe ticks that placed no order: quote timed out / unavailable, or no round yet. */
+  /** Probe ticks that placed no order: quote timed out / unavailable, quote from a round that ended before the order, or no round yet. */
   skipped: number
   /** Fill-rate denominator: filled + slippage rejects (the only outcomes the tolerance decides). */
   n: number
@@ -45,14 +45,26 @@ export type ProbeResult = {
   realizedSlippageCents: { p50: number; p95: number; max: number }
 }
 
-export type OrderProbeRequest = { side: Side; amountUsd: number; expectedPrice: number; maxSlippage: number }
+export type OrderProbeRequest = {
+  side: Side
+  amountUsd: number
+  expectedPrice: number
+  maxSlippage: number
+  /** Round the quote was taken in. */
+  roundId: number
+}
+
+/** A probe quote together with the round that was current when it was requested. */
+export type ProbeQuote = { quote: QuoteResult; roundId: number }
 
 export type BenchTarget = {
   sendDev(command: DevCommand): void
   stats(): ClientStats
   status(): ConnectionStatus
-  /** Fresh quote for (side, amount); resolves 'timeout' after 2 s. */
-  quote(side: Side, amountUsd: number): Promise<QuoteResult | 'timeout'>
+  /** Fresh quote for (side, amount); resolves 'timeout' after 2 s, 'no_round' before the first round. */
+  quote(side: Side, amountUsd: number): Promise<ProbeQuote | 'timeout' | 'no_round'>
+  /** Id of the current round, or 'none' before the first one. */
+  roundId(): number | 'none'
   /** Places an order and resolves with its result; 'timeout' after 3 s, 'no_round' before the first round. */
   placeOrder(request: OrderProbeRequest): Promise<OrderResult | 'timeout' | 'no_round'>
 }
@@ -263,18 +275,24 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
   let side: Side = 'yes'
   while (!shouldStop()) {
     const startedAt = deps.now()
-    const quote = await deps.target.quote(side, config.amountUsd)
-    if (quote === 'timeout' || quote.status !== 'ok') {
+    const probeQuote = await deps.target.quote(side, config.amountUsd)
+    if (probeQuote === 'timeout' || probeQuote === 'no_round' || probeQuote.quote.status !== 'ok') {
       tally.skipped++
     } else {
+      const { quote, roundId } = probeQuote
       if (config.quoteAgeMs > 0) await deps.sleep(config.quoteAgeMs)
       if (shouldStop()) break
-      const result = await deps.target.placeOrder({
-        side,
-        amountUsd: config.amountUsd,
-        expectedPrice: quote.avgPrice,
-        maxSlippage: config.slippage,
-      })
+      // A quote from a finished round would only produce a round_closed reject; don't count it as an order.
+      const result =
+        deps.target.roundId() !== roundId
+          ? 'no_round'
+          : await deps.target.placeOrder({
+              side,
+              amountUsd: config.amountUsd,
+              expectedPrice: quote.avgPrice,
+              maxSlippage: config.slippage,
+              roundId,
+            })
       if (result === 'no_round') {
         tally.skipped++
       } else {
@@ -304,7 +322,19 @@ function applySettings(p: BenchPhase, target: BenchTarget): void {
   if (p.probe !== 'off') target.sendDev({ kind: 'set_balance', usd: PROBE_START_BALANCE_USD })
 }
 
+/** Runs the scenario; the server's settings are restored to defaults however it ends (done, cancelled or thrown). */
 export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promise<BenchPhaseResult[] | 'cancelled'> {
+  try {
+    return await runPhases(scenario, deps)
+  } finally {
+    deps.target.sendDev({ kind: 'set_rate', tradesPerSec: DEFAULT_TRADES_PER_SEC })
+    deps.target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
+    deps.target.sendDev({ kind: 'set_latency', ms: 0 })
+    deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })
+  }
+}
+
+async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<BenchPhaseResult[] | 'cancelled'> {
   const results: BenchPhaseResult[] = []
   for (const [index, p] of scenario.phases.entries()) {
     deps.onPhase(p, index)
@@ -393,7 +423,5 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
       probe: probeResult,
     })
   }
-  deps.target.sendDev({ kind: 'set_rate', tradesPerSec: DEFAULT_TRADES_PER_SEC })
-  deps.target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
   return results
 }

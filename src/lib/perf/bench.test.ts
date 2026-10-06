@@ -4,6 +4,7 @@ import {
   type BenchPhase,
   type BenchPhaseResult,
   type BenchTarget,
+  type ProbeQuote,
   DEEP_SCENARIO,
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
@@ -12,7 +13,7 @@ import {
 } from '@/lib/perf/bench'
 import { PerfMetrics } from '@/lib/perf/perf-metrics'
 import type { ClientStats, ConnectionStatus } from '@/lib/realtime/market-client'
-import type { DevCommand, OrderResult, QuoteResult, Side } from '@/lib/realtime/protocol'
+import type { DevCommand, OrderResult, Side } from '@/lib/realtime/protocol'
 
 const QUOTE_PRICE = 0.5
 const REPLY_MS = 50
@@ -32,12 +33,15 @@ const fill = (side: Side, avgPrice: number): OrderResult => ({
 const defaultScript: OrderScript = (_index, side) => fill(side, QUOTE_PRICE + 0.02)
 
 /** A fake backend on vitest fake timers: counters grow with (fake) time at the configured rate and batch. */
-function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean } = {}) {
+function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean; roundAt?: (ms: number) => number } = {}) {
+  const roundAt = options.roundAt ?? (() => 1)
+  const startedAt = Date.now()
+  const currentRound = (): number => roundAt(Date.now() - startedAt)
   const script = options.script ?? defaultScript
   const commands: DevCommand[] = []
   const windows: { phase: string; edge: 'start' | 'end'; at: number }[] = []
   const quotes: { side: Side; at: number }[] = []
-  const orders: { side: Side; expectedPrice: number; maxSlippage: number; at: number }[] = []
+  const orders: { side: Side; expectedPrice: number; maxSlippage: number; roundId: number; at: number }[] = []
   const stats: ClientStats = { messages: 0, trades: 0, gaps: 0, resyncs: 0, duplicates: 0, reconnects: 0 }
   let rate = 30
   let batchMs = 100
@@ -69,27 +73,33 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean 
       return stats
     },
     status: () => status,
-    quote: (side, amountUsd) =>
-      new Promise<QuoteResult | 'timeout'>((resolve) =>
+    roundId: currentRound,
+    quote: (side, amountUsd) => {
+      const roundId = currentRound()
+      return new Promise<ProbeQuote | 'timeout'>((resolve) =>
         setTimeout(() => {
           quotes.push({ side, at: Date.now() })
           resolve({
-            status: 'ok',
-            requestId: quotes.length,
-            side,
-            amountUsd,
-            shares: amountUsd / QUOTE_PRICE,
-            avgPrice: QUOTE_PRICE,
-            cost: amountUsd,
-            potentialPayout: amountUsd / QUOTE_PRICE,
-            potentialProfit: amountUsd,
-            clipped: false,
+            roundId,
+            quote: {
+              status: 'ok',
+              requestId: quotes.length,
+              side,
+              amountUsd,
+              shares: amountUsd / QUOTE_PRICE,
+              avgPrice: QUOTE_PRICE,
+              cost: amountUsd,
+              potentialPayout: amountUsd / QUOTE_PRICE,
+              potentialProfit: amountUsd,
+              clipped: false,
+            },
           })
         }, REPLY_MS),
-      ),
+      )
+    },
     placeOrder: (request) => {
       const index = orders.length
-      orders.push({ side: request.side, expectedPrice: request.expectedPrice, maxSlippage: request.maxSlippage, at: Date.now() })
+      orders.push({ side: request.side, expectedPrice: request.expectedPrice, maxSlippage: request.maxSlippage, roundId: request.roundId, at: Date.now() })
       return new Promise((resolve) => setTimeout(() => resolve(script(index, request.side)), REPLY_MS))
     },
   }
@@ -171,6 +181,8 @@ describe('runBench', () => {
       { kind: 'set_drop_rate', rate: 0 },
       { kind: 'set_rate', tradesPerSec: 30 },
       { kind: 'set_batch_interval', ms: 100 },
+      { kind: 'set_latency', ms: 0 },
+      { kind: 'set_drop_rate', rate: 0 },
     ])
   })
 
@@ -316,8 +328,46 @@ describe('runBench', () => {
     }
     const results = await run([{ ...BASE, probe: PROBE }, BASE], fake)
     expect(results).toBe('cancelled')
-    expect(fake.commands.map((c) => c.kind)).toEqual(['set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate', 'set_balance'])
+    expect(fake.commands.map((c) => c.kind)).toEqual([
+      'set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate', 'set_balance',
+      // finally: restore server defaults
+      'set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate',
+    ])
+    expect(fake.commands.slice(-4)).toEqual([
+      { kind: 'set_rate', tradesPerSec: 30 },
+      { kind: 'set_batch_interval', ms: 100 },
+      { kind: 'set_latency', ms: 0 },
+      { kind: 'set_drop_rate', rate: 0 },
+    ])
     expect(fake.orders).toHaveLength(0)
+  })
+
+  it('restores defaults even when a phase throws', async () => {
+    const fake = fakeBench()
+    fake.deps.onPhase = () => {
+      throw new Error('boom')
+    }
+    const promise = runBench({ phases: [BASE], warmupMs: 1_000 }, fake.deps)
+    const settled = promise.catch((error: unknown) => error)
+    await vi.advanceTimersByTimeAsync(1_000)
+    fake.dispose()
+    expect(await settled).toBeInstanceOf(Error)
+    expect(fake.commands.at(-1)).toEqual({ kind: 'set_drop_rate', rate: 0 })
+    expect(fake.commands.filter((c) => c.kind === 'set_rate')).toEqual([{ kind: 'set_rate', tradesPerSec: 30 }])
+  })
+
+  it('skips the order (counts skipped) when the round changed after the quote', async () => {
+    // Warm-up 1 s, then quotes at t=1 s/2 s/3 s that order 0.55 s later. The round flips at t=2.3 s,
+    // so the t=2 s quote (round 1) would be ordered in round 2 and must be skipped.
+    const fake = fakeBench({ roundAt: (ms) => (ms < 2_300 ? 1 : 2) })
+    const [result] = await runOk(
+      [{ ...BASE, group: 'slippage', durationMs: 3_000, probe: { ...PROBE, quoteAgeMs: 500 } }],
+      fake,
+    )
+    if (result.probe === 'off') throw new Error('probe expected')
+    expect(result.probe.skipped).toBe(1)
+    expect(result.probe.orders).toBe(2)
+    expect(fake.orders.map((o) => o.roundId)).toEqual([1, 2])
   })
 })
 

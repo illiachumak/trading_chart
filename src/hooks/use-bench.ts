@@ -4,11 +4,13 @@
 // align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.
 
 import { useEffect, useState } from 'react'
+import { BENCH_AVAILABLE } from '@/config/bench'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import {
   type BenchPhaseResult,
   type BenchScenario,
   type BenchTarget,
+  type ProbeQuote,
   DEEP_SCENARIO,
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
@@ -18,7 +20,7 @@ import {
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
 import type { MarketRuntime } from '@/lib/realtime/market-runtime'
 import { selectRound } from '@/lib/realtime/market-store'
-import type { OrderResult, QuoteResult, ServerMessage } from '@/lib/realtime/protocol'
+import type { OrderResult, ServerMessage } from '@/lib/realtime/protocol'
 
 export type BenchMode = 'quick' | 'matrix' | 'deep'
 
@@ -32,6 +34,7 @@ const ORDER_TIMEOUT_MS = 3_000
 const LIVE_POLL_MS = 100
 
 function readMode(): BenchMode | 'disabled' {
+  if (!BENCH_AVAILABLE) return 'disabled'
   const value = new URLSearchParams(window.location.search).get('bench')
   return value === 'quick' || value === 'matrix' || value === 'deep' ? value : 'disabled'
 }
@@ -74,19 +77,25 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
     sendDev: (command) => runtime.send({ type: 'dev', command }),
     stats: () => runtime.client.stats,
     status: () => runtime.client.getStatus(),
+    roundId: () => {
+      const round = selectRound(runtime.market.store.getState())
+      return round === 'loading' ? 'none' : round.id
+    },
     quote: (side, amountUsd) => {
+      // The round is captured with the request so a later round change is detectable.
+      const round = selectRound(runtime.market.store.getState())
+      if (round === 'loading') return Promise.resolve('no_round')
       const requestId = PROBE_ID_BASE + probeRequests++
       const answer = waitForMessage(
         runtime,
-        (m): QuoteResult | 'no' => (m.type === 'quote_result' && m.quote.requestId === requestId ? m.quote : 'no'),
+        (m): ProbeQuote | 'no' =>
+          m.type === 'quote_result' && m.quote.requestId === requestId ? { quote: m.quote, roundId: round.id } : 'no',
         QUOTE_TIMEOUT_MS,
       )
       runtime.send({ type: 'quote', requestId, side, amountUsd })
       return answer
     },
     placeOrder: (request) => {
-      const round = selectRound(runtime.market.store.getState())
-      if (round === 'loading') return Promise.resolve('no_round')
       const clientOrderId = crypto.randomUUID()
       const result = waitForMessage(
         runtime,
@@ -94,7 +103,7 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
           m.type === 'order_result' && m.result.clientOrderId === clientOrderId ? m.result : 'no',
         ORDER_TIMEOUT_MS,
       )
-      runtime.send({ type: 'place_order', clientOrderId, roundId: round.id, ...request })
+      runtime.send({ type: 'place_order', clientOrderId, ...request })
       return result
     },
   }
