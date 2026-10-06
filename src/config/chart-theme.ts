@@ -2,7 +2,7 @@
 export const CHART_COLORS = {
   // Transparent so the wrapper's dot-grid shows through; the card behind is surface (#1b1b1b).
   background: 'transparent',
-  text: '#707070', // subtle (axis labels)
+  text: '#a3a3a3', // axis labels (contrast on surface)
   grid: '#2b2b2b', // border
   line: '#00dad9', // cyan
   baseline: '#ec9400', // amber dotted "50%" line

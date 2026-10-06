@@ -13,7 +13,7 @@ export function LiveProbability() {
   const price = useMarket(selectPrice)
   return (
     <section className="card p-4 md:p-5">
-      <p className="eyebrow">Live probability</p>
+      <h2 className="eyebrow">Live probability</h2>
       <div className="mt-3 grid grid-cols-2 gap-2">
         <Outcome side="yes" price={price} />
         <Outcome side="no" price={price} />

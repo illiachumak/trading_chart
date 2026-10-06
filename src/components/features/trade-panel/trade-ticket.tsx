@@ -9,7 +9,7 @@ export function TradeTicket() {
   const ticket = useTradeTicket()
   return (
     <section className="card flex flex-col gap-4 p-4 md:p-5">
-      <p className="eyebrow">Trade</p>
+      <h2 className="eyebrow">Trade</h2>
       <div className="grid grid-cols-2 gap-2">
         <SideButton side="yes" selected={ticket.side === 'yes'} onSelect={ticket.setSide} />
         <SideButton side="no" selected={ticket.side === 'no'} onSelect={ticket.setSide} />

@@ -14,7 +14,7 @@ export function RoundHeader() {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p className="eyebrow">Round #{round.id}</p>
+        <h2 className="eyebrow">Round #{round.id}</h2>
         <Probability />
       </div>
       <div className="text-right">

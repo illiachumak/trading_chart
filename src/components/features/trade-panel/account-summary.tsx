@@ -10,7 +10,7 @@ export function AccountSummary() {
   const { position } = account
   return (
     <section className="card flex flex-col gap-3 p-4 text-body md:p-5">
-      <p className="eyebrow">Account</p>
+      <h2 className="eyebrow">Account</h2>
       <div className="flex items-baseline justify-between border-b-hairline border-border pb-3">
         <span className="text-fg-secondary">Balance</span>
         <span className="text-heading-lg tabular-nums" data-testid="balance">
