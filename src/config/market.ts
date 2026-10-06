@@ -41,6 +41,10 @@ export const RESYNC_TIMEOUT_MS = 1_000
 export const MAX_PENDING_MESSAGES = 5_000
 export const CLOCK_SYNC_WINDOW = 20
 export const PERF_SAMPLE_CAPACITY = 4_000
+/** Frame budget at 60 Hz; frames longer than this count towards pctFramesOverBudget. */
+export const FRAME_BUDGET_MS = 16.7
+/** Event Timing reports only events at least this long (16 ms is the API minimum). */
+export const INP_DURATION_THRESHOLD_MS = 16
 
 // UI
 export const QUOTE_DEBOUNCE_MS = 150

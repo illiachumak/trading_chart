@@ -1,3 +1,5 @@
+import { percentileOfSorted } from '@/lib/perf/metrics-math'
+
 /** Fixed-size window of samples with nearest-rank percentiles. */
 export class RollingStat {
   private readonly capacity: number
@@ -27,10 +29,12 @@ export class RollingStat {
   }
 
   percentile(p: number): number {
-    if (this.values.length === 0) return 0
-    const sorted = [...this.values].sort((a, b) => a - b)
-    const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))
-    return sorted[index]
+    return percentileOfSorted(this.sorted(), p)
+  }
+
+  /** Ascending copy of the window (sort once when several percentiles are needed). */
+  sorted(): number[] {
+    return [...this.values].sort((a, b) => a - b)
   }
 
   max(): number {
