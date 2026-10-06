@@ -31,7 +31,8 @@
 // Phase names match `phase` in the bench results shown in the panel / `[bench]` console JSON.
 
 async (page) => {
-  // Change the query to pick the scenario: ?bench=quick (~3 min) | matrix (~9 min) | deep (~16 min) | scale (~3.5 min).
+  // Change the query to pick the scenario: ?bench=realistic (~11 min) | soak (~30 min) — the tracked set —
+  // or the historical quick (~3 min) | matrix (~9 min) | deep (~16 min) | scale (~3.5 min).
   // Unverified in automated Chromium, see the CAVEAT in the header.
   const CPU_THROTTLE = 1 // 1 = no throttling; 4 or 6 = CPU slowed by that factor
   const BENCH_URL = 'http://localhost:4173/?bench=matrix'

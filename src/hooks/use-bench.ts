@@ -1,8 +1,10 @@
-// Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix|deep|scale`.
+// Runs the scripted benchmark against the live runtime when the URL has `?bench=<mode>`:
+// `realistic` and `soak` are the tracked set; `quick|matrix|deep|scale` reproduce the published v2 numbers.
 // `&cpu=<label>` (e.g. `4x`) is stored in each result's environment as metadata only; nothing is throttled.
 // Harness hooks: `<html data-bench-phase>` is the phase name only inside the measured window,
 // `warmup:<name>` before it, `settle` after it and `done` at the end, so an external CDP sampler can
-// align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.
+// align its samples; each result also carries window timestamps. The soak marks its single window the same way
+// (`warmup:<name>`, `<name>`, `done`). Results go to the panel and `console.info('[bench]')`.
 
 import { useEffect, useState } from 'react'
 import { BENCH_AVAILABLE } from '@/config/bench'
@@ -19,34 +21,48 @@ import {
   MATRIX_SCENARIO,
   SCALE_SCENARIO,
   QUICK_SCENARIO,
+  REALISTIC_SCENARIO,
   readCpuThrottleLabel,
   readHeapMb,
   runBench,
 } from '@/lib/perf/bench'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
+import { type SoakResult, SOAK_CONFIG, runSoak } from '@/lib/perf/soak'
 import type { MarketRuntime } from '@/lib/realtime/market-runtime'
 import { selectRound } from '@/lib/realtime/market-store'
 import type { OrderResult, ServerMessage } from '@/lib/realtime/protocol'
 
-export type BenchMode = 'quick' | 'matrix' | 'deep' | 'scale'
+type ScenarioMode = 'quick' | 'matrix' | 'deep' | 'scale' | 'realistic'
+export type BenchMode = ScenarioMode | 'soak'
+
+/** Phase results of a scenario run, or the single soak result. */
+export type BenchOutput = { kind: 'phases'; results: BenchPhaseResult[] } | { kind: 'soak'; result: SoakResult }
 
 export type BenchState =
   | { kind: 'idle'; mode: BenchMode }
   | { kind: 'running'; mode: BenchMode; phase: string; index: number; total: number }
-  | { kind: 'done'; mode: BenchMode; results: BenchPhaseResult[] }
+  | { kind: 'done'; mode: BenchMode; output: BenchOutput }
 
 const QUOTE_TIMEOUT_MS = 2_000
 const ORDER_TIMEOUT_MS = 3_000
 const SERVER_STATS_TIMEOUT_MS = 1_000
 const LIVE_POLL_MS = 100
 
+const BENCH_MODES: readonly BenchMode[] = ['quick', 'matrix', 'deep', 'scale', 'realistic', 'soak']
+
 function readMode(): BenchMode | 'disabled' {
   if (!BENCH_AVAILABLE) return 'disabled'
   const value = new URLSearchParams(window.location.search).get('bench')
-  return value === 'quick' || value === 'matrix' || value === 'deep' || value === 'scale' ? value : 'disabled'
+  return BENCH_MODES.find((mode) => mode === value) ?? 'disabled'
 }
 
-const SCENARIOS: Record<BenchMode, BenchScenario> = { quick: QUICK_SCENARIO, matrix: MATRIX_SCENARIO, deep: DEEP_SCENARIO, scale: SCALE_SCENARIO }
+const SCENARIOS: Record<ScenarioMode, BenchScenario> = {
+  quick: QUICK_SCENARIO,
+  matrix: MATRIX_SCENARIO,
+  deep: DEEP_SCENARIO,
+  scale: SCALE_SCENARIO,
+  realistic: REALISTIC_SCENARIO,
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -147,22 +163,22 @@ export function useBench(): BenchState | 'disabled' {
     if (mode === 'disabled') return
     let cancelled = false
     const release = perfMetrics.acquireSampling(browserSamplingEnv())
-    const scenario = SCENARIOS[mode]
+    const target = createBenchTarget(runtime)
+    const common = {
+      environment: readEnvironment(),
+      metrics: perfMetrics,
+      sleep,
+      now: () => performance.now(),
+      wallNow: () => Date.now(),
+      heapMb: () => readHeapMb(performance),
+      isCancelled: () => cancelled,
+    }
 
-    const run = async (): Promise<void> => {
-      while (runtime.client.getStatus() !== 'live') {
-        await sleep(LIVE_POLL_MS)
-        if (cancelled) return
-      }
+    const runScenario = async (scenarioMode: ScenarioMode): Promise<BenchOutput | 'cancelled'> => {
+      const scenario = SCENARIOS[scenarioMode]
       const results = await runBench(scenario, {
-        target: createBenchTarget(runtime),
-        environment: readEnvironment(),
-        metrics: perfMetrics,
-        sleep,
-        now: () => performance.now(),
-        wallNow: () => Date.now(),
-        heapMb: () => readHeapMb(performance),
-        isCancelled: () => cancelled,
+        ...common,
+        target,
         onPhase: (phase, index) => {
           setHarnessPhase(`warmup:${phase.name}`)
           setState({ kind: 'running', mode, phase: phase.name, index, total: scenario.phases.length })
@@ -170,10 +186,34 @@ export function useBench(): BenchState | 'disabled' {
         // The bare phase name marks only the measured window; 'settle' covers probe drain + wait for live.
         onWindow: (phase, edge) => setHarnessPhase(edge === 'start' ? phase.name : 'settle'),
       })
-      if (results === 'cancelled' || cancelled) return
+      return results === 'cancelled' ? results : { kind: 'phases', results }
+    }
+
+    const runSoakMode = async (): Promise<BenchOutput | 'cancelled'> => {
+      const total = Math.ceil(SOAK_CONFIG.durationMs / SOAK_CONFIG.sampleEveryMs)
+      setHarnessPhase(`warmup:${SOAK_CONFIG.name}`)
+      setState({ kind: 'running', mode, phase: `${SOAK_CONFIG.name} · warm-up`, index: 0, total })
+      const result = await runSoak(SOAK_CONFIG, {
+        ...common,
+        target,
+        onWindow: (edge) => setHarnessPhase(edge === 'start' ? SOAK_CONFIG.name : 'settle'),
+        // One state update per sample (once a minute by default).
+        onSample: (sample, count) =>
+          setState({ kind: 'running', mode, phase: `${SOAK_CONFIG.name} · sample ${sample.index}`, index: sample.index - 1, total: count }),
+      })
+      return result === 'cancelled' ? result : { kind: 'soak', result }
+    }
+
+    const run = async (): Promise<void> => {
+      while (runtime.client.getStatus() !== 'live') {
+        await sleep(LIVE_POLL_MS)
+        if (cancelled) return
+      }
+      const output = mode === 'soak' ? await runSoakMode() : await runScenario(mode)
+      if (output === 'cancelled' || cancelled) return
       setHarnessPhase('done')
-      console.info('[bench]', JSON.stringify(results))
-      setState({ kind: 'done', mode, results })
+      console.info('[bench]', JSON.stringify(output.kind === 'phases' ? output.results : output.result))
+      setState({ kind: 'done', mode, output })
     }
     void run()
 
