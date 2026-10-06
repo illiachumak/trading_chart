@@ -27,7 +27,7 @@ export function createInProcessWorker(
     },
     config,
   )
-  let tickTimer: ReturnType<typeof setTimeout> | undefined
+  let tickTimer: ReturnType<typeof setTimeout> | 'none' = 'none'
   let paused = false
   const loop = (): void => {
     try {
@@ -41,7 +41,7 @@ export function createInProcessWorker(
   const heartbeat = setInterval(() => server.heartbeat(), HEARTBEAT_INTERVAL_MS)
   const pause = (): void => {
     paused = true
-    clearTimeout(tickTimer)
+    if (tickTimer !== 'none') clearTimeout(tickTimer)
     clearInterval(heartbeat)
   }
   const worker: WorkerHandle = {

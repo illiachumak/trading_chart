@@ -33,11 +33,26 @@ async function countTradesPerSecond(batchMs: number | undefined): Promise<number
 
 describe('in-process worker batch loop', () => {
   it('flushes ~10 trade batches per second by default and ~30 at 33 ms', async () => {
-    expect(await countTradesPerSecond(undefined)).toBeGreaterThan(8)
-    expect(await countTradesPerSecond(undefined)).toBeLessThan(11)
+    const normal = await countTradesPerSecond(undefined)
+    expect(normal).toBeGreaterThan(8)
+    expect(normal).toBeLessThan(11)
     const fast = await countTradesPerSecond(33)
     expect(fast).toBeGreaterThan(26)
     expect(fast).toBeLessThan(32)
+  })
+
+  it('keeps the feed running after a tick throws', async () => {
+    const { worker, server } = createInProcessWorker({ ...DEFAULT_SERVER_CONFIG, tradesPerSec: 100 }, 5)
+    let ticks = 0
+    vi.spyOn(server, 'tick').mockImplementation(() => {
+      ticks += 1
+      if (ticks === 1) throw new Error('boom')
+    })
+    // The first scheduled loop throws; vitest surfaces it as an unhandled timer error, so catch it here.
+    await expect(vi.advanceTimersByTimeAsync(150)).rejects.toThrow('boom')
+    await vi.advanceTimersByTimeAsync(350)
+    expect(ticks).toBeGreaterThan(2)
+    worker.terminate()
   })
 
   it('cancels every pending timer on pause and terminate', async () => {
