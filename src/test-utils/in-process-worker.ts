@@ -20,6 +20,7 @@ export function createInProcessWorker(
         })
       },
       now: () => Date.now(),
+      perfNow: () => performance.now(),
       rng: createRng(seed),
       schedule: (fn, ms) => {
         setTimeout(fn, ms)

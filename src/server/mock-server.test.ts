@@ -10,6 +10,8 @@ type Timer = { fn: () => void; due: number; order: number }
 /** `timerJitterMs` makes timers fire late, like real `setTimeout` under load. */
 function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
   let now = 0
+  /** Fake monotonic clock: every read advances it by 3 ms, so each tick measures exactly 3 ms. */
+  let perf = 0
   let timerOrder = 0
   const posted: WorkerToMain[] = []
   const deliveredAt: number[] = []
@@ -21,6 +23,7 @@ function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
         deliveredAt.push(now)
       },
       now: () => now,
+      perfNow: () => (perf += 3),
       rng: createRng(42),
       schedule: (fn, ms) => timers.push({ fn, due: now + ms + timerJitterMs, order: timerOrder++ }),
     },
@@ -119,6 +122,23 @@ describe('MockServer', () => {
       expect(batch.aggregated).toBe('none')
       expect(batch.items.length).toBeGreaterThan(300)
     }
+  })
+
+  it('accumulates tick timing and reports it on request (max resets per report)', () => {
+    const t = setup()
+    t.connect(1)
+    const report = () => {
+      t.posted.length = 0
+      t.send(1, { type: 'dev', command: { kind: 'report_server_stats' } })
+      const stats = t.messagesFor(1).filter((m) => m.type === 'server_stats')
+      expect(stats).toHaveLength(1)
+      return stats[0]
+    }
+    t.tickFor(1_000)
+    expect(report()).toMatchObject({ type: 'server_stats', tickCount: 10, tickMsTotal: 30, tickMsMax: 3 })
+    expect(report()).toMatchObject({ tickCount: 10, tickMsTotal: 30, tickMsMax: 0 })
+    t.tickFor(500)
+    expect(report()).toMatchObject({ tickCount: 15, tickMsTotal: 45, tickMsMax: 3 })
   })
 
   it('acknowledges a connection', () => {

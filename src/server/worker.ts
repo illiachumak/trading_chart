@@ -9,6 +9,7 @@ const server = new MockServer(
   {
     post: (message) => postMessage(message),
     now: () => Date.now(),
+    perfNow: () => performance.now(),
     rng: createRng(Date.now()),
     schedule: (fn, ms) => {
       setTimeout(fn, ms)

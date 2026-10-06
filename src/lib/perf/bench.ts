@@ -62,6 +62,9 @@ export type OrderProbeRequest = {
   roundId: number
 }
 
+/** Cumulative worker tick timing (a `server_stats` payload); `tickMsMax` is since the previous report. */
+export type ServerTickStats = { tickCount: number; tickMsTotal: number; tickMsMax: number }
+
 /** A probe quote together with the round that was current when it was requested. */
 export type ProbeQuote = { quote: QuoteResult; roundId: number }
 
@@ -69,6 +72,8 @@ export type BenchTarget = {
   sendDev(command: DevCommand): void
   stats(): ClientStats
   status(): ConnectionStatus
+  /** Asks the server for its tick stats; 'timeout' after 1 s (e.g. while disconnected). */
+  serverStats(): Promise<ServerTickStats | 'timeout'>
   /** Fresh quote for (side, amount); resolves 'timeout' after 2 s, 'no_round' before the first round. */
   quote(side: Side, amountUsd: number): Promise<ProbeQuote | 'timeout' | 'no_round'>
   /** Id of the current round, or 'none' before the first one. */
@@ -127,6 +132,11 @@ export type BenchPhaseResult = {
   longTasks: number
   /** Longest long task inside the measured window. */
   longTaskMaxMs: number
+  /** Worker `tick()` calls per second; below 1000 / batchMs = the worker can't keep its batch interval. */
+  serverTicksPerSec: number | 'n/a'
+  serverTickMsAvg: number | 'n/a'
+  /** Longest single tick inside the window. */
+  serverTickMsMax: number | 'n/a'
   heapMb: number | 'n/a'
   gaps: number
   resyncs: number
@@ -263,6 +273,25 @@ export function readHeapMb(perf: unknown): number | 'n/a' {
   return typeof used === 'number' && Number.isFinite(used) ? round2(used / BYTES_PER_MB) : 'n/a'
 }
 
+type ServerTickWindow = Pick<BenchPhaseResult, 'serverTicksPerSec' | 'serverTickMsAvg' | 'serverTickMsMax'>
+
+function serverTickWindow(
+  start: ServerTickStats | 'timeout',
+  end: ServerTickStats | 'timeout',
+  elapsedMs: number,
+): ServerTickWindow {
+  if (start === 'timeout' || end === 'timeout' || elapsedMs <= 0) {
+    return { serverTicksPerSec: 'n/a', serverTickMsAvg: 'n/a', serverTickMsMax: 'n/a' }
+  }
+  const ticks = end.tickCount - start.tickCount
+  return {
+    serverTicksPerSec: round2(ticks / (elapsedMs / 1_000)),
+    serverTickMsAvg: ticks > 0 ? round2((end.tickMsTotal - start.tickMsTotal) / ticks) : 0,
+    // The start report resets the max, so the end report's max covers the window.
+    serverTickMsMax: round2(end.tickMsMax),
+  }
+}
+
 async function waitForLive(deps: BenchDeps): Promise<boolean> {
   for (let waited = 0; waited < LIVE_TIMEOUT_MS; waited += LIVE_POLL_MS) {
     if (deps.target.status() === 'live') return true
@@ -387,6 +416,8 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     const startedAt = deps.now()
     const wallClockStartMs = deps.wallNow()
     deps.onWindow(p, 'start')
+    // Requested now, awaited after capture so the window timing is not shifted by the round trip.
+    const serverStart = deps.target.serverStats()
 
     let measuring = true
     const probeStop = (): boolean => !measuring || deps.isCancelled()
@@ -405,6 +436,7 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     // Capture before waiting for the probe or for live so rates cover exactly the measured window.
     const endedAt = deps.now()
     deps.onWindow(p, 'end')
+    const serverEnd = deps.target.serverStats()
     const elapsedMs = endedAt - startedAt
     const endStats = { ...deps.target.stats() }
     const snap = deps.metrics.snapshot()
@@ -421,6 +453,7 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     const commits = ratesPerSecond(snap.totals.commits, startTotals.commits, elapsedMs)
     const commitsTotal = Object.values(commits).reduce((sum, rate) => sum + rate, 0)
 
+    const serverTicks = serverTickWindow(await serverStart, await serverEnd, elapsedMs)
     const probeResult = await probe
     if (deps.isCancelled()) return 'cancelled'
     const endedLive = await waitForLive(deps)
@@ -457,6 +490,7 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       commitsPerSec: Object.fromEntries(Object.entries(commits).map(([id, rate]) => [id, round2(rate)])),
       longTasks: snap.totals.longTasks - startTotals.longTasks,
       longTaskMaxMs: round2(snap.windowLongTaskMaxMs),
+      ...serverTicks,
       heapMb,
       gaps: endStats.gaps - startStats.gaps,
       resyncs: endStats.resyncs - startStats.resyncs,

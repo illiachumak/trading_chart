@@ -35,7 +35,14 @@ const fill = (side: Side, avgPrice: number): OrderResult => ({
 const defaultScript: OrderScript = (_index, side) => fill(side, QUOTE_PRICE + 0.02)
 
 /** A fake backend on vitest fake timers: counters grow with (fake) time at the configured rate and batch. */
-function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean; roundAt?: (ms: number) => number } = {}) {
+function fakeBench(
+  options: {
+    script?: OrderScript
+    isCancelled?: () => boolean
+    roundAt?: (ms: number) => number
+    serverStats?: 'answer' | 'silent'
+  } = {},
+) {
   const roundAt = options.roundAt ?? (() => 1)
   const startedAt = Date.now()
   const currentRound = (): number => roundAt(Date.now() - startedAt)
@@ -50,6 +57,8 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean;
   let aggregation: AggregationMode = 'compact'
   let integratedAt = Date.now()
   let status: ConnectionStatus = 'live'
+  // Fake worker: one tick per batch interval, each taking 2 ms; the longest tick between reports is 5 ms.
+  let serverTicks = 0
 
   const integrate = (): void => {
     const now = Date.now()
@@ -59,6 +68,7 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean;
     stats.tradeItems += aggregation === 'full' ? rate * seconds : (1_000 / batchMs) * 13 * seconds
     stats.bytes += (aggregation === 'full' ? rate : (1_000 / batchMs) * 13) * BYTES_PER_ITEM * seconds
     stats.messages += (1_000 / batchMs) * seconds
+    serverTicks += (1_000 / batchMs) * seconds
     integratedAt = now
   }
 
@@ -80,6 +90,17 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean;
       return stats
     },
     status: () => status,
+    serverStats: () =>
+      new Promise((resolve) =>
+        setTimeout(() => {
+          if (options.serverStats === 'silent') {
+            resolve('timeout')
+            return
+          }
+          integrate()
+          resolve({ tickCount: serverTicks, tickMsTotal: serverTicks * 2, tickMsMax: 5 })
+        }, REPLY_MS),
+      ),
     roundId: currentRound,
     quote: (side, amountUsd) => {
       const roundId = currentRound()
@@ -224,6 +245,22 @@ describe('runBench', () => {
     expect(result.receivedKBPerSec).toBe(16.25)
   })
 
+  it('reports worker tick stats over the measured window', async () => {
+    const fake = fakeBench()
+    const [result] = await runOk([{ ...BASE, batchMs: 50 }], fake)
+    expect(result.serverTicksPerSec).toBe(20)
+    expect(result.serverTickMsAvg).toBe(2)
+    expect(result.serverTickMsMax).toBe(5)
+  })
+
+  it("reports n/a tick stats when the server doesn't answer", async () => {
+    const fake = fakeBench({ serverStats: 'silent' })
+    const [result] = await runOk([BASE], fake)
+    expect(result.serverTicksPerSec).toBe('n/a')
+    expect(result.serverTickMsAvg).toBe('n/a')
+    expect(result.serverTickMsMax).toBe('n/a')
+  })
+
   it('spreads disconnects across the phase and reports reconnects', async () => {
     const fake = fakeBench()
     const [result] = await runOk([{ ...BASE, disconnects: 3, group: 'faults' }], fake)
@@ -304,8 +341,9 @@ describe('runBench', () => {
     expect(fake.windows).toEqual([
       { phase: 'base', edge: 'start', at: t0 + 1_000 },
       { phase: 'base', edge: 'end', at: t0 + 11_000 },
-      { phase: 'second', edge: 'start', at: t0 + 12_000 },
-      { phase: 'second', edge: 'end', at: t0 + 16_000 },
+      // The settle after a window includes the server-stats round trip (REPLY_MS).
+      { phase: 'second', edge: 'start', at: t0 + 12_000 + REPLY_MS },
+      { phase: 'second', edge: 'end', at: t0 + 16_000 + REPLY_MS },
     ])
     expect([first.windowStartMs, first.windowEndMs]).toEqual([t0 + 1_000, t0 + 11_000])
     expect(first.wallClockStartMs).toBe(t0 + 1_000 + 5_000_000)

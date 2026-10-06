@@ -11,6 +11,7 @@ import {
   type BenchScenario,
   type BenchTarget,
   type ProbeQuote,
+  type ServerTickStats,
   DEEP_SCENARIO,
   MATRIX_SCENARIO,
   SCALE_SCENARIO,
@@ -32,6 +33,7 @@ export type BenchState =
 
 const QUOTE_TIMEOUT_MS = 2_000
 const ORDER_TIMEOUT_MS = 3_000
+const SERVER_STATS_TIMEOUT_MS = 1_000
 const LIVE_POLL_MS = 100
 
 function readMode(): BenchMode | 'disabled' {
@@ -78,6 +80,16 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
     sendDev: (command) => runtime.send({ type: 'dev', command }),
     stats: () => runtime.client.stats,
     status: () => runtime.client.getStatus(),
+    serverStats: () => {
+      const answer = waitForMessage(
+        runtime,
+        (m): ServerTickStats | 'no' =>
+          m.type === 'server_stats' ? { tickCount: m.tickCount, tickMsTotal: m.tickMsTotal, tickMsMax: m.tickMsMax } : 'no',
+        SERVER_STATS_TIMEOUT_MS,
+      )
+      runtime.send({ type: 'dev', command: { kind: 'report_server_stats' } })
+      return answer
+    },
     roundId: () => {
       const round = selectRound(runtime.market.store.getState())
       return round === 'loading' ? 'none' : round.id

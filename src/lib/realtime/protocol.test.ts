@@ -8,6 +8,11 @@ describe('parseServerMessage', () => {
     expect(parseServerMessage(raw)).toEqual({ type: 'heartbeat', ts: 5, seq: 1 })
   })
 
+  it('accepts server_stats', () => {
+    const raw = JSON.stringify({ type: 'server_stats', seq: 3, ts: 1, tickCount: 2, tickMsTotal: 4, tickMsMax: 3 })
+    expect(parseServerMessage(raw)).toMatchObject({ type: 'server_stats', tickCount: 2 })
+  })
+
   it('rejects unknown types, missing seq and broken JSON', () => {
     expect(parseServerMessage(JSON.stringify({ type: 'nope', ts: 1, seq: 1 }))).toBe('invalid')
     expect(parseServerMessage(JSON.stringify({ type: 'heartbeat', ts: 1 }))).toBe('invalid')
@@ -72,6 +77,10 @@ describe('parseClientMessage', () => {
         command: { kind: 'set_aggregation', mode },
       })
     }
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'report_server_stats' } }))).toEqual({
+      type: 'dev',
+      command: { kind: 'report_server_stats' },
+    })
     expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'force_disconnect' } }))).toEqual({
       type: 'dev',
       command: { kind: 'force_disconnect' },

@@ -41,6 +41,8 @@ import { createRng, type Rng } from '@/server/rng'
 export type MockServerDeps = {
   post: (message: WorkerToMain) => void
   now: () => number
+  /** Monotonic clock for tick timing only (performance.now in the worker). */
+  perfNow: () => number
   rng: Rng
   schedule: (fn: () => void, ms: number) => void
 }
@@ -88,6 +90,10 @@ export class MockServer {
   private batchIntervalMs: number
   private aggregation: AggregationMode
   private lastPublishAt: number
+  /** Tick timing for the bench (`report_server_stats`): two clock reads per tick. */
+  private tickCount = 0
+  private tickMsTotal = 0
+  private tickMsMax = 0
   /** Per-connection FIFO of delayed messages; drained by a single timer per connection. */
   private readonly pending = new Map<number, PendingDelivery[]>()
 
@@ -144,9 +150,14 @@ export class MockServer {
 
   /** Called every `getBatchIntervalMs()`: generate mock arrivals, execute due events, broadcast. */
   tick(): void {
+    const startedAt = this.deps.perfNow()
     const now = this.deps.now()
     for (const arrival of this.arrivals.generate(now)) this.engine.enqueueMock(arrival.ts, arrival.shares)
     for (const payload of this.engine.advance(now)) this.broadcast(this.publish(this.aggregate(payload)))
+    const elapsed = this.deps.perfNow() - startedAt
+    this.tickCount++
+    this.tickMsTotal += elapsed
+    if (elapsed > this.tickMsMax) this.tickMsMax = elapsed
   }
 
   /** Compaction happens before publish, so replays carry exactly what live clients got. */
@@ -219,6 +230,12 @@ export class MockServer {
         this.engine.setBalance(command.usd)
         const ts = this.deps.now()
         this.broadcast(this.publish({ type: 'account', ts, account: this.engine.getAccount() }))
+        return
+      }
+      case 'report_server_stats': {
+        const { tickCount, tickMsTotal, tickMsMax } = this
+        this.tickMsMax = 0
+        this.broadcast(this.publish({ type: 'server_stats', ts: this.deps.now(), tickCount, tickMsTotal, tickMsMax }))
         return
       }
       case 'force_disconnect':

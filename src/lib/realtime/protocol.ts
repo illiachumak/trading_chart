@@ -79,6 +79,8 @@ export type DevCommand =
   | { kind: 'set_drop_rate'; rate: number }
   | { kind: 'set_batch_interval'; ms: number }
   | { kind: 'set_aggregation'; mode: AggregationMode }
+  /** Dev/bench only: the server answers with a `server_stats` payload. */
+  | { kind: 'report_server_stats' }
   /** Dev/bench only: overwrites the cash balance, which breaks the starting-capital invariant (START_BALANCE). */
   | { kind: 'set_balance'; usd: number }
   | { kind: 'force_disconnect' }
@@ -119,6 +121,11 @@ export type ServerPayload =
   | { type: 'quote_result'; ts: number; quote: QuoteResult }
   | { type: 'account'; ts: number; account: Account }
   | { type: 'heartbeat'; ts: number }
+  /**
+   * Dev/bench only, sent on `report_server_stats`. Cumulative `tick()` count and wall time (ms)
+   * since the server started; `tickMsMax` is the longest tick since the previous report.
+   */
+  | { type: 'server_stats'; ts: number; tickCount: number; tickMsTotal: number; tickMsMax: number }
 
 export type SnapshotPayload = {
   type: 'snapshot'
@@ -149,6 +156,7 @@ const SERVER_TYPES: ReadonlySet<string> = new Set([
   'quote_result',
   'account',
   'heartbeat',
+  'server_stats',
 ])
 
 // Shallow guard: the payload comes from our own backend, we only verify the envelope.
@@ -185,6 +193,7 @@ function isDevCommand(value: unknown): value is DevCommand {
       return value.mode === 'full' || value.mode === 'compact'
     case 'set_balance':
       return typeof value.usd === 'number' && Number.isFinite(value.usd)
+    case 'report_server_stats':
     case 'force_disconnect':
       return true
     default:
