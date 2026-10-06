@@ -23,7 +23,7 @@ export const selectQuote = (s: AccountStoreState): QuoteResult | 'none' => s.quo
 export class AccountStore {
   readonly store: ExternalStore<AccountStoreState> = createExternalStore(INITIAL)
 
-  attach(client: MarketClient): () => void {
+  attach(client: Pick<MarketClient, 'onMessage'>): () => void {
     return client.onMessage((message) => this.handle(message))
   }
 
