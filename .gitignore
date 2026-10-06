@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.vitest
+
+# Browser-check artifacts
+.playwright-mcp
