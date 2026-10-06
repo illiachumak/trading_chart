@@ -3,7 +3,7 @@ import { AccountStore } from '@/lib/realtime/account-store'
 import { ChartFeeder } from '@/lib/realtime/chart-feeder'
 import { MarketClient } from '@/lib/realtime/market-client'
 import { createWorkerSocketFactory } from '@/lib/realtime/mock-socket'
-import type { DevCommand, Trade } from '@/lib/realtime/protocol'
+import type { DevCommand } from '@/lib/realtime/protocol'
 import { DEFAULT_SERVER_CONFIG } from '@/server/mock-server'
 import { createInProcessWorker } from '@/test-utils/in-process-worker'
 
@@ -44,10 +44,10 @@ describe('client + mock server end to end', () => {
     client.onMessage((message) => seqs.push(message.seq))
     const account = new AccountStore()
     account.attach(client)
-    const userTrades: Trade[] = []
+    const userTrades: string[] = []
     client.onMessage((message) => {
       if (message.type !== 'trades') return
-      for (const trade of message.items) if (trade.source === 'user') userTrades.push(trade)
+      for (const trade of message.items) if (trade.source === 'user') userTrades.push(trade.clientOrderId)
     })
     const dev = (command: DevCommand) => client.send({ type: 'dev', command })
 
@@ -88,7 +88,7 @@ describe('client + mock server end to end', () => {
     expect(midTruth.history.length).toBeGreaterThan(30)
     expect(feeder.getHistory()).toEqual(midTruth.history)
     expect(account.store.getState().account).toEqual(midTruth.account)
-    expect(userTrades.filter((t) => t.clientOrderId === 'e2e-order')).toHaveLength(1)
+    expect(userTrades.filter((id) => id === 'e2e-order')).toHaveLength(1)
     const order = account.store.getState().order
     expect(order.kind).toBe('done')
     if (order.kind === 'done') expect(order.result.status).toBe('filled')
