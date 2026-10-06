@@ -13,9 +13,10 @@ import {
 } from '@/lib/perf/bench'
 import { PerfMetrics } from '@/lib/perf/perf-metrics'
 import type { ClientStats, ConnectionStatus } from '@/lib/realtime/market-client'
-import type { DevCommand, OrderResult, Side } from '@/lib/realtime/protocol'
+import type { AggregationMode, DevCommand, OrderResult, Side } from '@/lib/realtime/protocol'
 
 const QUOTE_PRICE = 0.5
+const BYTES_PER_ITEM = 128
 const REPLY_MS = 50
 
 type OrderScript = (index: number, side: Side) => OrderResult | 'timeout'
@@ -45,6 +46,7 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean;
   const stats: ClientStats = { messages: 0, trades: 0, tradeItems: 0, bytes: 0, gaps: 0, resyncs: 0, duplicates: 0, reconnects: 0 }
   let rate = 30
   let batchMs = 100
+  let aggregation: AggregationMode = 'compact'
   let integratedAt = Date.now()
   let status: ConnectionStatus = 'live'
 
@@ -52,6 +54,9 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean;
     const now = Date.now()
     const seconds = (now - integratedAt) / 1_000
     stats.trades += rate * seconds
+    // Compact mode ships ~13 items per batch at these rates; full ships every trade.
+    stats.tradeItems += aggregation === 'full' ? rate * seconds : (1_000 / batchMs) * 13 * seconds
+    stats.bytes += (aggregation === 'full' ? rate : (1_000 / batchMs) * 13) * BYTES_PER_ITEM * seconds
     stats.messages += (1_000 / batchMs) * seconds
     integratedAt = now
   }
@@ -66,6 +71,7 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean;
       commands.push(command)
       if (command.kind === 'set_rate') rate = command.tradesPerSec
       if (command.kind === 'set_batch_interval') batchMs = command.ms
+      if (command.kind === 'set_aggregation') aggregation = command.mode
       if (command.kind === 'force_disconnect') stats.reconnects++
     },
     stats: () => {
@@ -155,6 +161,7 @@ const BASE: BenchPhase = {
   disconnects: 0,
   latencyMs: 0,
   dropRate: 0,
+  aggregation: 'full',
   probe: 'off',
 }
 
@@ -177,12 +184,14 @@ describe('runBench', () => {
       { kind: 'set_batch_interval', ms: 33 },
       { kind: 'set_latency', ms: 200 },
       { kind: 'set_drop_rate', rate: 0.1 },
+      { kind: 'set_aggregation', mode: 'full' },
       { kind: 'set_latency', ms: 0 },
       { kind: 'set_drop_rate', rate: 0 },
       { kind: 'set_rate', tradesPerSec: 30 },
       { kind: 'set_batch_interval', ms: 100 },
       { kind: 'set_latency', ms: 0 },
       { kind: 'set_drop_rate', rate: 0 },
+      { kind: 'set_aggregation', mode: 'compact' },
     ])
   })
 
@@ -192,6 +201,9 @@ describe('runBench', () => {
     expect(result.durationSec).toBe(10)
     expect(result.receivedTradesPerSec).toBe(100)
     expect(result.receivedMessagesPerSec).toBe(20)
+    expect(result.receivedItemsPerSec).toBe(100)
+    expect(result.receivedKBPerSec).toBe(12.5) // 100 items/s × 128 B / 1024
+    expect(result.aggregation).toBe('full')
     expect(result.commitsPerSec).toEqual({ chart: 10 })
     expect(result.commitsPerSecTotal).toBe(10)
     expect(result.group).toBe('load')
@@ -199,6 +211,16 @@ describe('runBench', () => {
     expect(result.heapMb).toBe(42)
     expect(result.probe).toBe('off')
     expect(fake.quotes).toHaveLength(0)
+  })
+
+  it('compact phases report all trades but only the shipped items and their bytes', async () => {
+    const fake = fakeBench()
+    const [result] = await runOk([{ ...BASE, tradesPerSec: 5_000, aggregation: 'compact' }], fake)
+    expect(fake.commands).toContainEqual({ kind: 'set_aggregation', mode: 'compact' })
+    expect(result.aggregation).toBe('compact')
+    expect(result.receivedTradesPerSec).toBe(5_000)
+    expect(result.receivedItemsPerSec).toBe(130)
+    expect(result.receivedKBPerSec).toBe(16.25)
   })
 
   it('spreads disconnects across the phase and reports reconnects', async () => {
@@ -329,15 +351,16 @@ describe('runBench', () => {
     const results = await run([{ ...BASE, probe: PROBE }, BASE], fake)
     expect(results).toBe('cancelled')
     expect(fake.commands.map((c) => c.kind)).toEqual([
-      'set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate', 'set_balance',
+      'set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate', 'set_aggregation', 'set_balance',
       // finally: restore server defaults
-      'set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate',
+      'set_rate', 'set_batch_interval', 'set_latency', 'set_drop_rate', 'set_aggregation',
     ])
-    expect(fake.commands.slice(-4)).toEqual([
+    expect(fake.commands.slice(-5)).toEqual([
       { kind: 'set_rate', tradesPerSec: 30 },
       { kind: 'set_batch_interval', ms: 100 },
       { kind: 'set_latency', ms: 0 },
       { kind: 'set_drop_rate', rate: 0 },
+      { kind: 'set_aggregation', mode: 'compact' },
     ])
     expect(fake.orders).toHaveLength(0)
   })
@@ -352,7 +375,7 @@ describe('runBench', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     fake.dispose()
     expect(await settled).toBeInstanceOf(Error)
-    expect(fake.commands.at(-1)).toEqual({ kind: 'set_drop_rate', rate: 0 })
+    expect(fake.commands.at(-1)).toEqual({ kind: 'set_aggregation', mode: 'compact' })
     expect(fake.commands.filter((c) => c.kind === 'set_rate')).toEqual([{ kind: 'set_rate', tradesPerSec: 30 }])
   })
 
@@ -396,6 +419,8 @@ describe('scenarios', () => {
     ])
     expect(MATRIX_SCENARIO.phases).toHaveLength(34)
     expect(MATRIX_SCENARIO.phases.every((p) => p.durationMs === 12_000)).toBe(true)
+    // Published v2 numbers were measured with every trade shipped.
+    expect(MATRIX_SCENARIO.phases.every((p) => p.aggregation === 'full')).toBe(true)
     expect(new Set(MATRIX_SCENARIO.phases.map((p) => p.name)).size).toBe(34)
   })
 
@@ -423,15 +448,17 @@ describe('set_balance and deep scenario', () => {
     const balances = fake.commands.flatMap((c, i) => (c.kind === 'set_balance' ? [{ i, usd: c.usd }] : []))
     expect(balances).toHaveLength(1)
     expect(balances[0].usd).toBe(1_000)
-    expect(fake.commands.slice(balances[0].i - 4, balances[0].i).map((c) => c.kind)).toEqual([
+    expect(fake.commands.slice(balances[0].i - 5, balances[0].i).map((c) => c.kind)).toEqual([
       'set_rate',
       'set_batch_interval',
       'set_latency',
       'set_drop_rate',
+      'set_aggregation',
     ])
   })
 
   it('defines the deep scenario shape', () => {
+    expect(DEEP_SCENARIO.phases.every((p) => p.aggregation === 'full')).toBe(true)
     const slip = DEEP_SCENARIO.phases.filter((p) => p.group === 'slippage')
     const batch = DEEP_SCENARIO.phases.filter((p) => p.group === 'batch')
     expect(slip).toHaveLength(36)

@@ -2,11 +2,18 @@
 // batch interval × slippage × faults), optionally probes order fills, and samples the
 // same collectors the HUD uses. Pure — the browser wiring is in useBench.
 
-import { BATCH_INTERVAL_MS, DEFAULT_TRADES_PER_SEC } from '@/config/market'
+import { BATCH_INTERVAL_MS, DEFAULT_AGGREGATION, DEFAULT_TRADES_PER_SEC } from '@/config/market'
 import type { PerfMetrics } from '@/lib/perf/perf-metrics'
 import { ratesPerSecond } from '@/lib/perf/rates'
 import type { ClientStats, ConnectionStatus } from '@/lib/realtime/market-client'
-import type { DevCommand, OrderResult, QuoteResult, RejectReason, Side } from '@/lib/realtime/protocol'
+import type {
+  AggregationMode,
+  DevCommand,
+  OrderResult,
+  QuoteResult,
+  RejectReason,
+  Side,
+} from '@/lib/realtime/protocol'
 import { isRecord } from '@/lib/utils/is-record'
 
 export type ProbeConfig = { slippage: number; amountUsd: number; everyMs: number; quoteAgeMs: number }
@@ -22,6 +29,7 @@ export type BenchPhase = {
   disconnects: number
   latencyMs: number
   dropRate: number
+  aggregation: AggregationMode
   probe: ProbeConfig | 'off'
 }
 
@@ -92,6 +100,7 @@ export type BenchPhaseResult = {
   batchMs: number
   latencyMs: number
   dropRate: number
+  aggregation: AggregationMode
   durationSec: number
   /** Measured window in `now()` time (performance.now in the browser). */
   windowStartMs: number
@@ -107,7 +116,12 @@ export type BenchPhaseResult = {
   latencyP95Ms: number
   ticksPerFlushP50: number
   receivedMessagesPerSec: number
+  /** All trades the server reported (shipped + aggregated). Below `tradesPerSec` = the pipeline can't keep up. */
   receivedTradesPerSec: number
+  /** Trades shipped as items (equals receivedTradesPerSec in full mode). */
+  receivedItemsPerSec: number
+  /** Raw message characters per second / 1024 (~KB/s for ASCII JSON). */
+  receivedKBPerSec: number
   commitsPerSecTotal: number
   commitsPerSec: Record<string, number>
   longTasks: number
@@ -140,6 +154,8 @@ const phase = (fields: Partial<BenchPhase> & Pick<BenchPhase, 'name' | 'group' |
   disconnects: 0,
   latencyMs: 0,
   dropRate: 0,
+  // The published v2 numbers were measured with every trade shipped; keep these scenarios reproducible.
+  aggregation: 'full',
   probe: 'off',
   ...fields,
 })
@@ -207,6 +223,7 @@ export const DEEP_SCENARIO: BenchScenario = { phases: DEEP_PHASES, warmupMs: 2_0
 
 const LIVE_POLL_MS = 100
 const LIVE_TIMEOUT_MS = 5_000
+const BYTES_PER_KB = 1_024
 const BYTES_PER_MB = 1_048_576
 
 function round2(value: number): number {
@@ -312,12 +329,13 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
   return summarizeProbe(tally)
 }
 
-/** Every phase sends all four settings, in this order, so no phase inherits the previous one's. */
+/** Every phase sends all five settings, in this order, so no phase inherits the previous one's. */
 function applySettings(p: BenchPhase, target: BenchTarget): void {
   target.sendDev({ kind: 'set_rate', tradesPerSec: p.tradesPerSec })
   target.sendDev({ kind: 'set_batch_interval', ms: p.batchMs })
   target.sendDev({ kind: 'set_latency', ms: p.latencyMs })
   target.sendDev({ kind: 'set_drop_rate', rate: p.dropRate })
+  target.sendDev({ kind: 'set_aggregation', mode: p.aggregation })
   // Probe orders spend cash; start every probe phase from the same balance.
   if (p.probe !== 'off') target.sendDev({ kind: 'set_balance', usd: PROBE_START_BALANCE_USD })
 }
@@ -331,6 +349,7 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
     deps.target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
     deps.target.sendDev({ kind: 'set_latency', ms: 0 })
     deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })
+    deps.target.sendDev({ kind: 'set_aggregation', mode: DEFAULT_AGGREGATION })
   }
 }
 
@@ -372,11 +391,13 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     const heapMb = deps.heapMb()
     measuring = false
 
-    const received = ratesPerSecond(
-      { messages: endStats.messages, trades: endStats.trades },
-      { messages: startStats.messages, trades: startStats.trades },
-      elapsedMs,
-    )
+    const pick = (stats: ClientStats) => ({
+      messages: stats.messages,
+      trades: stats.trades,
+      tradeItems: stats.tradeItems,
+      bytes: stats.bytes,
+    })
+    const received = ratesPerSecond(pick(endStats), pick(startStats), elapsedMs)
     const commits = ratesPerSecond(snap.totals.commits, startTotals.commits, elapsedMs)
     const commitsTotal = Object.values(commits).reduce((sum, rate) => sum + rate, 0)
 
@@ -395,6 +416,7 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       batchMs: p.batchMs,
       latencyMs: p.latencyMs,
       dropRate: p.dropRate,
+      aggregation: p.aggregation,
       durationSec: round2(elapsedMs / 1_000),
       windowStartMs: round2(startedAt),
       windowEndMs: round2(endedAt),
@@ -409,6 +431,8 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       ticksPerFlushP50: snap.ticksPerFlushP50,
       receivedMessagesPerSec: round2(received.messages),
       receivedTradesPerSec: round2(received.trades),
+      receivedItemsPerSec: round2(received.tradeItems),
+      receivedKBPerSec: round2(received.bytes / BYTES_PER_KB),
       commitsPerSecTotal: round2(commitsTotal),
       commitsPerSec: Object.fromEntries(Object.entries(commits).map(([id, rate]) => [id, round2(rate)])),
       longTasks: snap.totals.longTasks - startTotals.longTasks,
