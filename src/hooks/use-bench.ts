@@ -1,6 +1,7 @@
 // Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix`.
-// Harness hooks: `<html data-bench-phase>` names the running phase ('done' at the end) so an
-// external CDP sampler can align its samples; results go to the panel and `console.info('[bench]')`.
+// Harness hooks: `<html data-bench-phase>` is the phase name only inside the measured window,
+// `warmup:<name>` before it, `settle` after it and `done` at the end, so an external CDP sampler can
+// align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.
 
 import { useEffect, useState } from 'react'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
@@ -13,11 +14,9 @@ import {
   runBench,
 } from '@/lib/perf/bench'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
-import type { AccountStoreState } from '@/lib/realtime/account-store'
 import type { MarketRuntime } from '@/lib/realtime/market-runtime'
 import { selectRound } from '@/lib/realtime/market-store'
-import type { OrderResult, QuoteResult } from '@/lib/realtime/protocol'
-import type { ExternalStore } from '@/lib/utils/external-store'
+import type { OrderResult, QuoteResult, ServerMessage } from '@/lib/realtime/protocol'
 
 export type BenchMode = 'quick' | 'matrix'
 
@@ -42,8 +41,11 @@ function setHarnessPhase(phase: string | 'clear'): void {
   else document.documentElement.dataset.benchPhase = phase
 }
 
-/** Resolves with the first store state `pick` maps to a value, or 'timeout'. */
-function waitForState<S, T>(store: ExternalStore<S>, pick: (state: S) => T | 'no', timeoutMs: number): Promise<T | 'timeout'> {
+/** Probe quotes use their own requestId range so AccountStore (the trade ticket) ignores their answers. */
+const PROBE_ID_BASE = 1_000_000_000
+
+/** Resolves with the first server message `pick` maps to a value, or 'timeout'; always unsubscribes. */
+function waitForMessage<T>(runtime: MarketRuntime, pick: (message: ServerMessage) => T | 'no', timeoutMs: number): Promise<T | 'timeout'> {
   return new Promise((resolve) => {
     const finish = (value: T | 'timeout'): void => {
       clearTimeout(timer)
@@ -51,44 +53,44 @@ function waitForState<S, T>(store: ExternalStore<S>, pick: (state: S) => T | 'no
       resolve(value)
     }
     const timer = setTimeout(() => finish('timeout'), timeoutMs)
-    const unsubscribe = store.subscribe(() => {
-      const value = pick(store.getState())
+    const unsubscribe = runtime.client.onMessage((message) => {
+      const value = pick(message)
       if (value !== 'no') finish(value)
     })
   })
 }
 
+/**
+ * Talks to the backend directly through the client, bypassing AccountStore: the probe's quotes and
+ * orders never touch the trade ticket's state, and the ticket's own quote refreshes can't supersede them.
+ */
 function createBenchTarget(runtime: MarketRuntime): BenchTarget {
-  const account = runtime.account
+  let probeRequests = 0
   return {
     sendDev: (command) => runtime.send({ type: 'dev', command }),
     stats: () => runtime.client.stats,
     status: () => runtime.client.getStatus(),
     quote: (side, amountUsd) => {
-      const previous = account.store.getState().quote
-      const answer = waitForState(
-        account.store,
-        (s: AccountStoreState): QuoteResult | 'no' =>
-          s.quote !== 'none' && s.quote !== previous && s.quote.side === side && s.quote.amountUsd === amountUsd
-            ? s.quote
-            : 'no',
+      const requestId = PROBE_ID_BASE + probeRequests++
+      const answer = waitForMessage(
+        runtime,
+        (m): QuoteResult | 'no' => (m.type === 'quote_result' && m.quote.requestId === requestId ? m.quote : 'no'),
         QUOTE_TIMEOUT_MS,
       )
-      account.requestQuote(side, amountUsd)
+      runtime.send({ type: 'quote', requestId, side, amountUsd })
       return answer
     },
-    placeOrder: async (request) => {
+    placeOrder: (request) => {
       const round = selectRound(runtime.market.store.getState())
-      // No round yet means nothing can be traded; report it like a refused order.
-      if (round === 'loading') return 'busy'
+      if (round === 'loading') return Promise.resolve('no_round')
       const clientOrderId = crypto.randomUUID()
-      const result = waitForState(
-        account.store,
-        (s: AccountStoreState): OrderResult | 'no' =>
-          s.order.kind === 'done' && s.order.result.clientOrderId === clientOrderId ? s.order.result : 'no',
+      const result = waitForMessage(
+        runtime,
+        (m): OrderResult | 'no' =>
+          m.type === 'order_result' && m.result.clientOrderId === clientOrderId ? m.result : 'no',
         ORDER_TIMEOUT_MS,
       )
-      if (account.placeOrder({ clientOrderId, roundId: round.id, ...request }) === 'busy') return 'busy'
+      runtime.send({ type: 'place_order', clientOrderId, roundId: round.id, ...request })
       return result
     },
   }
@@ -116,12 +118,15 @@ export function useBench(): BenchState | 'disabled' {
         metrics: perfMetrics,
         sleep,
         now: () => performance.now(),
+        wallNow: () => Date.now(),
         heapMb: () => readHeapMb(performance),
         isCancelled: () => cancelled,
         onPhase: (phase, index) => {
-          setHarnessPhase(phase.name)
+          setHarnessPhase(`warmup:${phase.name}`)
           setState({ kind: 'running', mode, phase: phase.name, index, total: scenario.phases.length })
         },
+        // The bare phase name marks only the measured window; 'settle' covers probe drain + wait for live.
+        onWindow: (phase, edge) => setHarnessPhase(edge === 'start' ? phase.name : 'settle'),
       })
       if (results === 'cancelled' || cancelled) return
       setHarnessPhase('done')

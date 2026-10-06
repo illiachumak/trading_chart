@@ -23,8 +23,12 @@ addEventListener('message', (event: MessageEvent<unknown>) => {
 
 // Self-rescheduling so a runtime change of the batch interval takes effect on the next tick.
 function loop(): void {
-  server.tick()
-  setTimeout(loop, server.getBatchIntervalMs())
+  try {
+    server.tick()
+  } finally {
+    // A throwing tick must not stop the feed.
+    setTimeout(loop, server.getBatchIntervalMs())
+  }
 }
 setTimeout(loop, server.getBatchIntervalMs())
 setInterval(() => server.heartbeat(), HEARTBEAT_INTERVAL_MS)

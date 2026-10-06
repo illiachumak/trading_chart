@@ -34,6 +34,7 @@ const defaultScript: OrderScript = (_index, side) => fill(side, QUOTE_PRICE + 0.
 function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean } = {}) {
   const script = options.script ?? defaultScript
   const commands: DevCommand[] = []
+  const windows: { phase: string; edge: 'start' | 'end'; at: number }[] = []
   const quotes: { side: Side; at: number }[] = []
   const orders: { side: Side; expectedPrice: number; maxSlippage: number; at: number }[] = []
   const stats: ClientStats = { messages: 0, trades: 0, gaps: 0, resyncs: 0, duplicates: 0, reconnects: 0 }
@@ -97,14 +98,17 @@ function fakeBench(options: { script?: OrderScript; isCancelled?: () => boolean 
     metrics,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
+    wallNow: () => Date.now() + 5_000_000,
     heapMb: () => 42,
     isCancelled: options.isCancelled ?? (() => false),
     onPhase: () => {},
+    onWindow: (p, edge) => windows.push({ phase: p.name, edge, at: Date.now() }),
   }
 
   return {
     deps,
     commands,
+    windows,
     quotes,
     orders,
     setStatus: (next: ConnectionStatus) => {
@@ -219,11 +223,70 @@ describe('runBench', () => {
       price_limit: 0,
     })
     expect(result.probe.timeouts).toBe(0)
+    expect(result.probe.n).toBe(6)
     expect(result.probe.fillRate).toBeCloseTo(4 / 6)
     expect(result.probe.realizedSlippageCents).toEqual({ p50: 2, p95: 2, max: 2 })
     expect(fake.orders.map((o) => o.side)).toEqual(['yes', 'no', 'yes', 'no', 'yes', 'no'])
     expect(fake.orders.every((o) => o.expectedPrice === QUOTE_PRICE && o.maxSlippage === 0.03)).toBe(true)
     expect(result.probeConfig).toEqual(PROBE)
+  })
+
+  it('fill rate counts only fills vs slippage rejects; other outcomes are reported separately', async () => {
+    const fake = fakeBench({
+      script: (index, side) => {
+        if (index === 0) return { status: 'rejected', clientOrderId: 'x', side, reason: 'round_closed', currentPrice: 0.5 }
+        if (index === 1) return { status: 'rejected', clientOrderId: 'x', side, reason: 'slippage', currentPrice: 0.6 }
+        if (index === 2) return 'timeout'
+        return fill(side, QUOTE_PRICE)
+      },
+    })
+    const [result] = await runOk([{ ...BASE, group: 'slippage', durationMs: 5_000, probe: PROBE }], fake)
+    if (result.probe === 'off') throw new Error('probe expected')
+    expect(result.probe.orders).toBe(5)
+    expect(result.probe.filled).toBe(2)
+    expect(result.probe.rejected.round_closed).toBe(1)
+    expect(result.probe.rejected.slippage).toBe(1)
+    expect(result.probe.timeouts).toBe(1)
+    expect(result.probe.n).toBe(3)
+    expect(result.probe.fillRate).toBeCloseTo(2 / 3)
+  })
+
+  it('fill rate is 0 when nothing filled or slipped', async () => {
+    const fake = fakeBench({
+      script: (_index, side) => ({ status: 'rejected', clientOrderId: 'x', side, reason: 'round_closed', currentPrice: 0.5 }),
+    })
+    const [result] = await runOk([{ ...BASE, group: 'slippage', durationMs: 2_000, probe: PROBE }], fake)
+    if (result.probe === 'off') throw new Error('probe expected')
+    expect(result.probe.n).toBe(0)
+    expect(result.probe.fillRate).toBe(0)
+  })
+
+  it('marks exactly the measured window and reports its timestamps', async () => {
+    const fake = fakeBench()
+    const t0 = Date.now()
+    const [first, second] = await runOk([BASE, { ...BASE, name: 'second', durationMs: 4_000 }], fake)
+    expect(fake.windows).toEqual([
+      { phase: 'base', edge: 'start', at: t0 + 1_000 },
+      { phase: 'base', edge: 'end', at: t0 + 11_000 },
+      { phase: 'second', edge: 'start', at: t0 + 12_000 },
+      { phase: 'second', edge: 'end', at: t0 + 16_000 },
+    ])
+    expect([first.windowStartMs, first.windowEndMs]).toEqual([t0 + 1_000, t0 + 11_000])
+    expect(first.wallClockStartMs).toBe(t0 + 1_000 + 5_000_000)
+    expect(second.windowEndMs - second.windowStartMs).toBe(4_000)
+  })
+
+  it('reports the longest long task of the measured window only', async () => {
+    const fake = fakeBench()
+    const t0 = Date.now()
+    // 500 ms during warm-up (excluded), 40 and 70 ms inside the window.
+    setTimeout(() => fake.deps.metrics.recordLongTask(500), 500)
+    setTimeout(() => fake.deps.metrics.recordLongTask(40), 3_000)
+    setTimeout(() => fake.deps.metrics.recordLongTask(70), 6_000)
+    const [result] = await runOk([BASE], fake)
+    expect(Date.now()).toBeGreaterThan(t0)
+    expect(result.longTasks).toBe(2)
+    expect(result.longTaskMaxMs).toBe(70)
   })
 
   it('probe waits quoteAgeMs between the quote and the order', async () => {

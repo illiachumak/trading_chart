@@ -28,13 +28,19 @@ export function createInProcessWorker(
     config,
   )
   let tickTimer: ReturnType<typeof setTimeout> | undefined
+  let paused = false
   const loop = (): void => {
-    server.tick()
-    tickTimer = setTimeout(loop, server.getBatchIntervalMs())
+    try {
+      server.tick()
+    } finally {
+      // A throwing tick must not stop the feed; a pause() during the tick must stick.
+      if (!paused) tickTimer = setTimeout(loop, server.getBatchIntervalMs())
+    }
   }
   tickTimer = setTimeout(loop, server.getBatchIntervalMs())
   const heartbeat = setInterval(() => server.heartbeat(), HEARTBEAT_INTERVAL_MS)
   const pause = (): void => {
+    paused = true
     clearTimeout(tickTimer)
     clearInterval(heartbeat)
   }

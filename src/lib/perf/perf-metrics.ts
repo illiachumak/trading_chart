@@ -25,6 +25,8 @@ export type PerfSnapshot = {
   latencyP50: number
   latencyP95: number
   ticksPerFlushP50: number
+  /** Longest long task since the last clearSamples() (totals.longTaskMaxMs is all-time). */
+  windowLongTaskMaxMs: number
   totals: PerfTotals
 }
 
@@ -42,6 +44,7 @@ export class PerfMetrics {
   private setDataFlushes = 0
   private longTasks = 0
   private longTaskMaxMs = 0
+  private windowLongTaskMaxMs = 0
   private readonly commits = new Map<string, number>()
   private samplingRefs = 0
   private stopSampling: () => void = () => {}
@@ -72,6 +75,7 @@ export class PerfMetrics {
   recordLongTask(ms: number): void {
     this.longTasks++
     this.longTaskMaxMs = Math.max(this.longTaskMaxMs, ms)
+    this.windowLongTaskMaxMs = Math.max(this.windowLongTaskMaxMs, ms)
   }
 
   clearSamples(): void {
@@ -79,6 +83,7 @@ export class PerfMetrics {
     this.flush.clear()
     this.latency.clear()
     this.ticksPerFlush.clear()
+    this.windowLongTaskMaxMs = 0
   }
 
   snapshot(): PerfSnapshot {
@@ -93,6 +98,7 @@ export class PerfMetrics {
       latencyP50: this.latency.percentile(0.5),
       latencyP95: this.latency.percentile(0.95),
       ticksPerFlushP50: this.ticksPerFlush.percentile(0.5),
+      windowLongTaskMaxMs: this.windowLongTaskMaxMs,
       totals: {
         flushes: this.flushes,
         setDataFlushes: this.setDataFlushes,

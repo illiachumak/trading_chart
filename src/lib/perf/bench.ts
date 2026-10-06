@@ -28,15 +28,18 @@ export type BenchPhase = {
 export type BenchScenario = { phases: readonly BenchPhase[]; warmupMs: number }
 
 export type ProbeResult = {
-  /** Orders sent (a 'busy' refusal is not an order). */
+  /** Orders sent. */
   orders: number
   /** Filled or partially filled. */
   filled: number
   rejected: Record<RejectReason, number>
   /** No result within the order timeout. */
   timeouts: number
-  /** Probe ticks that placed no order: quote timed out / unavailable, or an order was still pending. */
+  /** Probe ticks that placed no order: quote timed out / unavailable, or no round yet. */
   skipped: number
+  /** Fill-rate denominator: filled + slippage rejects (the only outcomes the tolerance decides). */
+  n: number
+  /** filled / n; 0 when n is 0. round_closed, timeouts etc. are reported separately, not counted here. */
   fillRate: number
   /** (fill avg − quoted avg) × 100, over filled orders; zeros when nothing filled. */
   realizedSlippageCents: { p50: number; p95: number; max: number }
@@ -50,18 +53,24 @@ export type BenchTarget = {
   status(): ConnectionStatus
   /** Fresh quote for (side, amount); resolves 'timeout' after 2 s. */
   quote(side: Side, amountUsd: number): Promise<QuoteResult | 'timeout'>
-  /** Places an order and resolves with its result; 'timeout' after 3 s, 'busy' if one is pending. */
-  placeOrder(request: OrderProbeRequest): Promise<OrderResult | 'timeout' | 'busy'>
+  /** Places an order and resolves with its result; 'timeout' after 3 s, 'no_round' before the first round. */
+  placeOrder(request: OrderProbeRequest): Promise<OrderResult | 'timeout' | 'no_round'>
 }
 
 export type BenchDeps = {
   target: BenchTarget
   metrics: PerfMetrics
   sleep(ms: number): Promise<void>
+  /** Monotonic clock (performance.now in the browser). */
   now(): number
+  /** Wall clock (Date.now) — anchors the window for external samplers. */
+  wallNow(): number
   heapMb(): number | 'n/a'
   isCancelled(): boolean
+  /** Phase starts (warm-up begins). */
   onPhase(phase: BenchPhase, index: number): void
+  /** Measured window edges: 'start' right after baselines, 'end' right at capture. */
+  onWindow(phase: BenchPhase, edge: 'start' | 'end'): void
 }
 
 export type BenchPhaseResult = {
@@ -72,6 +81,11 @@ export type BenchPhaseResult = {
   latencyMs: number
   dropRate: number
   durationSec: number
+  /** Measured window in `now()` time (performance.now in the browser). */
+  windowStartMs: number
+  windowEndMs: number
+  /** Date.now() at window start. */
+  wallClockStartMs: number
   fps: number
   frameP95Ms: number
   flushP50Ms: number
@@ -85,6 +99,7 @@ export type BenchPhaseResult = {
   commitsPerSecTotal: number
   commitsPerSec: Record<string, number>
   longTasks: number
+  /** Longest long task inside the measured window. */
   longTaskMaxMs: number
   heapMb: number | 'n/a'
   gaps: number
@@ -194,13 +209,15 @@ type ProbeTally = {
 
 function summarizeProbe(tally: ProbeTally): ProbeResult {
   const sorted = [...tally.slippageCents].sort((a, b) => a - b)
+  const n = tally.filled + tally.rejected.slippage
   return {
     orders: tally.orders,
     filled: tally.filled,
     rejected: tally.rejected,
     timeouts: tally.timeouts,
     skipped: tally.skipped,
-    fillRate: tally.orders > 0 ? round2(tally.filled / tally.orders) : 0,
+    n,
+    fillRate: n > 0 ? round2(tally.filled / n) : 0,
     realizedSlippageCents: {
       p50: round2(percentile(sorted, 0.5)),
       p95: round2(percentile(sorted, 0.95)),
@@ -230,7 +247,7 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
         expectedPrice: quote.avgPrice,
         maxSlippage: config.slippage,
       })
-      if (result === 'busy') {
+      if (result === 'no_round') {
         tally.skipped++
       } else {
         tally.orders++
@@ -269,6 +286,8 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
     const startStats = { ...deps.target.stats() }
     const startTotals = deps.metrics.snapshot().totals
     const startedAt = deps.now()
+    const wallClockStartMs = deps.wallNow()
+    deps.onWindow(p, 'start')
 
     let measuring = true
     const probeStop = (): boolean => !measuring || deps.isCancelled()
@@ -285,7 +304,9 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
     if (deps.isCancelled()) return 'cancelled'
 
     // Capture before waiting for the probe or for live so rates cover exactly the measured window.
-    const elapsedMs = deps.now() - startedAt
+    const endedAt = deps.now()
+    deps.onWindow(p, 'end')
+    const elapsedMs = endedAt - startedAt
     const endStats = { ...deps.target.stats() }
     const snap = deps.metrics.snapshot()
     const heapMb = deps.heapMb()
@@ -315,6 +336,9 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
       latencyMs: p.latencyMs,
       dropRate: p.dropRate,
       durationSec: round2(elapsedMs / 1_000),
+      windowStartMs: round2(startedAt),
+      windowEndMs: round2(endedAt),
+      wallClockStartMs,
       fps: snap.fps,
       frameP95Ms: round2(snap.frameP95),
       flushP50Ms: round2(snap.flushP50),
@@ -328,7 +352,7 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
       commitsPerSecTotal: round2(commitsTotal),
       commitsPerSec: Object.fromEntries(Object.entries(commits).map(([id, rate]) => [id, round2(rate)])),
       longTasks: snap.totals.longTasks - startTotals.longTasks,
-      longTaskMaxMs: round2(snap.totals.longTaskMaxMs),
+      longTaskMaxMs: round2(snap.windowLongTaskMaxMs),
       heapMb,
       gaps: endStats.gaps - startStats.gaps,
       resyncs: endStats.resyncs - startStats.resyncs,

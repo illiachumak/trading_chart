@@ -1,5 +1,6 @@
 import { Badge } from '@/components/common/badge'
 import { useBench } from '@/hooks/use-bench'
+import { cn } from '@/lib/utils/cn'
 
 /** Progress + raw JSON results of a `?bench=` run. Renders nothing otherwise. */
 export function BenchPanel() {
@@ -9,7 +10,11 @@ export function BenchPanel() {
   return (
     <aside
       // Bottom-right, above the dev footer; the perf HUD is docked top-left.
-      className="card fixed right-4 bottom-16 z-50 flex max-h-[60vh] w-[28rem] max-w-[calc(100vw-2rem)] flex-col gap-2 p-3 font-mono text-caption shadow-sticky"
+      // Compact while measuring so it covers as little of the page as possible.
+      className={cn(
+        'card fixed right-4 bottom-16 z-50 flex max-h-[60vh] max-w-[calc(100vw-2rem)] flex-col gap-2 p-3 font-mono text-caption shadow-sticky',
+        bench.kind === 'done' ? 'w-[28rem]' : 'w-72',
+      )}
       data-testid="bench-panel"
       aria-live="polite"
     >
