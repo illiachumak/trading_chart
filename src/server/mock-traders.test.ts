@@ -29,6 +29,18 @@ describe('ArrivalGenerator', () => {
     gen.setRate(200)
     expect(gen.generate(2_000).length).toBeGreaterThan(120)
   })
+
+  it('applies a rate increase immediately instead of waiting out the old gap', () => {
+    // At 1 trade/s the pending gap is ~1 s; at 1000/s the next 50 ms must already have arrivals.
+    for (let seed = 1; seed <= 20; seed++) {
+      const gen = new ArrivalGenerator(createRng(seed), 0, 1)
+      gen.generate(0)
+      gen.setRate(1_000)
+      const arrivals = gen.generate(50)
+      expect(arrivals.length).toBeGreaterThan(20)
+      expect(arrivals.every((a) => a.ts > 0)).toBe(true)
+    }
+  })
 })
 
 describe('drawShares', () => {
@@ -46,7 +58,10 @@ describe('ArrivalGenerator non-finite rate', () => {
   it('falls back to the minimum rate instead of stalling on NaN', () => {
     const gen = new ArrivalGenerator(createRng(5), 0, 20)
     gen.setRate(Number.NaN)
-    expect(gen.generate(600_000).length).toBeGreaterThan(0)
+    // ~MIN_TRADES_PER_SEC × 600 s; a NaN gap would stall after at most one arrival.
+    const count = gen.generate(600_000).length
+    expect(count).toBeGreaterThan(500)
+    expect(count).toBeLessThan(700)
   })
 })
 

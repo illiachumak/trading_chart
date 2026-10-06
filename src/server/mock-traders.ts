@@ -37,21 +37,28 @@ export class ArrivalGenerator {
   private readonly rng: Rng
   private rate: number
   private nextTs: number
+  /** End of the last generated window: nothing at or before it is generated again. */
+  private generatedUntil: number
 
   constructor(rng: Rng, startTs: number, tradesPerSec: number) {
     this.rng = rng
     this.rate = clampRate(tradesPerSec)
+    this.generatedUntil = startTs
     this.nextTs = startTs + this.gap()
   }
 
+  /** Takes effect immediately: Poisson arrivals are memoryless, so the pending gap is redrawn. */
   setRate(tradesPerSec: number): void {
     this.rate = clampRate(tradesPerSec)
+    this.nextTs = this.generatedUntil + this.gap()
   }
 
   generate(untilTs: number): MockArrival[] {
+    this.generatedUntil = Math.max(this.generatedUntil, untilTs)
     const arrivals: MockArrival[] = []
     while (this.nextTs <= untilTs) {
-      arrivals.push({ ts: Math.floor(this.nextTs), shares: drawShares(this.rng) })
+      // ceil: never stamp an arrival at or before the window that was already executed.
+      arrivals.push({ ts: Math.ceil(this.nextTs), shares: drawShares(this.rng) })
       this.nextTs += this.gap()
     }
     return arrivals
