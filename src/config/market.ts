@@ -39,7 +39,9 @@ export const PERF_SAMPLE_CAPACITY = 4_000
 
 // UI
 export const QUOTE_DEBOUNCE_MS = 150
-export const QUOTE_REFRESH_MS = 1_000
+// Matches UI_THROTTLE_MS. Fill rate at the default 3c slippage depends on quote age: with a fresh quote it is
+// 100%/97%/91% at 100/500/1000 trades/s, with 250 ms old quotes 97%/84%/73%; at 1 s refresh quotes were up to 1 s old.
+export const QUOTE_REFRESH_MS = 250
 /** Absolute slippage tolerance in price units (0.03 = 3¢). */
 export const DEFAULT_MAX_SLIPPAGE = 0.03
 export const MAX_SLIPPAGE = 0.1

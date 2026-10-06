@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { DEFAULT_MAX_SLIPPAGE } from '@/config/market'
 import { useMarket } from '@/hooks/use-market'
 import { usePlaceOrder } from '@/hooks/use-place-order'
-import { useQuote } from '@/hooks/use-quote'
-import type { OrderStatus } from '@/lib/realtime/account-store'
+import { useMarketRuntime } from '@/hooks/use-market-runtime'
+import { useQuoteRequests } from '@/hooks/use-quote'
+import { type OrderStatus, pickQuoteFor } from '@/lib/realtime/account-store'
 import { selectRound, selectStatus } from '@/lib/realtime/market-store'
-import type { QuoteResult, Side } from '@/lib/realtime/protocol'
+import type { Side } from '@/lib/realtime/protocol'
 import { parseAmount } from '@/lib/utils/parse-amount'
 
 export type TradeTicket = {
@@ -13,12 +14,13 @@ export type TradeTicket = {
   setSide: (side: Side) => void
   amountInput: string
   setAmountInput: (value: string) => void
+  amount: number | 'invalid'
   amountValid: boolean
   slippage: number
   setSlippage: (value: number) => void
-  quote: QuoteResult | 'none'
   order: OrderStatus
-  canSubmit: boolean
+  /** Everything except the quote: market live, round known, no order in flight. */
+  marketReady: boolean
   submit: () => void
 }
 
@@ -27,7 +29,8 @@ export function useTradeTicket(): TradeTicket {
   const [amountInput, setAmountState] = useState('10')
   const [slippage, setSlippageState] = useState<number>(DEFAULT_MAX_SLIPPAGE)
   const amount = parseAmount(amountInput)
-  const quote = useQuote(side, amount)
+  const runtime = useMarketRuntime()
+  useQuoteRequests(side, amount)
   const round = useMarket(selectRound)
   const status = useMarket(selectStatus)
   const { order, place, dismiss } = usePlaceOrder()
@@ -47,20 +50,19 @@ export function useTradeTicket(): TradeTicket {
     dismiss()
   }
 
-  // Single source of truth for "can this ticket be sent right now", narrowed for submit().
-  const ready =
-    status === 'live' && round !== 'loading' && quote !== 'none' && quote.status === 'ok' && order.kind !== 'pending'
-      ? { roundId: round.id, quote }
-      : 'not-ready'
+  const marketReady = status === 'live' && round !== 'loading' && order.kind !== 'pending'
 
   const submit = (): void => {
-    if (ready === 'not-ready') return
+    if (status !== 'live' || round === 'loading' || order.kind === 'pending') return
+    // Read the latest quote now (not from a render closure), so the order uses the freshest price.
+    const quote = pickQuoteFor(runtime.account.store.getState(), side, amount)
+    if (quote === 'none' || quote.status !== 'ok') return
     // The quote's average price is what the user saw; the server enforces slippage against it.
     place({
-      roundId: ready.roundId,
+      roundId: round.id,
       side,
-      amountUsd: ready.quote.amountUsd,
-      expectedPrice: ready.quote.avgPrice,
+      amountUsd: quote.amountUsd,
+      expectedPrice: quote.avgPrice,
       maxSlippage: slippage,
     })
   }
@@ -70,12 +72,12 @@ export function useTradeTicket(): TradeTicket {
     setSide,
     amountInput,
     setAmountInput,
+    amount,
     amountValid: amount !== 'invalid',
     slippage,
     setSlippage,
-    quote,
     order,
-    canSubmit: ready !== 'not-ready',
+    marketReady,
     submit,
   }
 }

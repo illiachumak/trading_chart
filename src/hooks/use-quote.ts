@@ -1,14 +1,14 @@
 import { useEffect } from 'react'
 import { QUOTE_DEBOUNCE_MS, QUOTE_REFRESH_MS } from '@/config/market'
-import { useAccount } from '@/hooks/use-market'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
-import { selectQuote } from '@/lib/realtime/account-store'
-import type { QuoteResult, Side } from '@/lib/realtime/protocol'
+import type { Side } from '@/lib/realtime/protocol'
 
-/** Server-side quote for (side, amount): debounced, then refreshed while inputs are stable. */
-export function useQuote(side: Side, amount: number | 'invalid'): QuoteResult | 'none' {
+/**
+ * Requests a server-side quote for (side, amount): debounced, then refreshed while inputs are stable.
+ * Subscribes to nothing: results are read by leaf components, so the caller never re-renders on a quote.
+ */
+export function useQuoteRequests(side: Side, amount: number | 'invalid'): void {
   const runtime = useMarketRuntime()
-  const quote = useAccount(selectQuote)
 
   useEffect(() => {
     if (amount === 'invalid') return
@@ -24,7 +24,4 @@ export function useQuote(side: Side, amount: number | 'invalid'): QuoteResult | 
       if (refresh !== 'none') clearInterval(refresh)
     }
   }, [runtime, side, amount])
-
-  if (amount === 'invalid' || quote === 'none' || quote.side !== side || quote.amountUsd !== amount) return 'none'
-  return quote
 }

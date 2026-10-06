@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AccountStore, type OrderRequest, selectOrder, selectQuote, selectRoundHistory } from '@/lib/realtime/account-store'
+import {
+  AccountStore,
+  type AccountStoreState,
+  hasOkQuoteFor,
+  type OrderRequest,
+  pickQuoteFor,
+  selectOrder,
+  selectQuote,
+  selectRoundHistory,
+} from '@/lib/realtime/account-store'
 import { ClockSync } from '@/lib/realtime/clock-sync'
 import {
   MarketStore,
@@ -444,5 +453,29 @@ describe('AccountStore', () => {
     client.status('idle')
     expect(account.store.getState()).toEqual({ account: 'loading', order: { kind: 'idle' }, quote: 'none' })
     expect(() => new AccountStore().placeOrder(ORDER)).toThrow('not attached')
+  })
+})
+
+describe('pickQuoteFor / hasOkQuoteFor', () => {
+  const ok = { status: 'ok', requestId: 1, side: 'yes', amountUsd: 10, shares: 20, avgPrice: 0.5, cost: 10, potentialPayout: 20, potentialProfit: 10, clipped: false } as const
+  const unavailable = { status: 'unavailable', requestId: 2, side: 'yes', amountUsd: 10 } as const
+  const withQuote = (quote: AccountStoreState['quote']): AccountStoreState => ({ account: 'loading', order: { kind: 'idle' }, quote })
+
+  it('returns the quote for matching side and amount', () => {
+    expect(pickQuoteFor(withQuote(ok), 'yes', 10)).toBe(ok)
+    expect(hasOkQuoteFor(withQuote(ok), 'yes', 10)).toBe(true)
+  })
+
+  it('ignores other side or amount', () => {
+    expect(pickQuoteFor(withQuote(ok), 'no', 10)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 11)).toBe('none')
+    expect(hasOkQuoteFor(withQuote(ok), 'no', 10)).toBe(false)
+  })
+
+  it("is 'none' when unavailable, absent or the amount is invalid", () => {
+    expect(pickQuoteFor(withQuote('none'), 'yes', 10)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 'invalid')).toBe('none')
+    expect(pickQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(unavailable)
+    expect(hasOkQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(false)
   })
 })

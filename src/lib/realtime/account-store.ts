@@ -27,6 +27,19 @@ export const selectRoundHistory = (s: AccountStoreState): readonly RoundResult[]
   s.account === 'loading' ? EMPTY_HISTORY : s.account.history
 export const selectQuote = (s: AccountStoreState): QuoteResult | 'none' => s.quote
 
+/** The stored quote if it answers exactly (side, amount); 'none' otherwise. Pure, for synchronous reads at submit time. */
+export function pickQuoteFor(state: AccountStoreState, side: Side, amount: number | 'invalid'): QuoteResult | 'none' {
+  const quote = state.quote
+  if (amount === 'invalid' || quote === 'none' || quote.side !== side || quote.amountUsd !== amount) return 'none'
+  return quote
+}
+
+/** Primitive selector: true when a fillable quote exists for (side, amount). */
+export function hasOkQuoteFor(state: AccountStoreState, side: Side, amount: number | 'invalid'): boolean {
+  const quote = pickQuoteFor(state, side, amount)
+  return quote !== 'none' && quote.status === 'ok'
+}
+
 function samePosition(a: Position, b: Position): boolean {
   return (
     a.yesShares === b.yesShares &&
