@@ -1,6 +1,9 @@
 // Server-side aggregation of a `trades` batch (AggregationMode 'compact').
 // The chart plots the last price of each second, so keeping the last trade of every second
 // makes the client's chart identical to the full stream by construction.
+// Invariant: compaction is per batch, and "last of its second" means last *within this batch*.
+// A second that spans several batches therefore keeps one trade per batch. Each one moves the
+// open point, and the one in the final batch fixes the second's value, as in the full stream.
 
 import type { Trade, TradeAggregate } from '@/lib/realtime/protocol'
 

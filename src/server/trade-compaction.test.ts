@@ -71,4 +71,21 @@ describe('compactTrades', () => {
     expect(lastPerSecond(kept)).toEqual(lastPerSecond(items))
     expect(kept.length).toBeLessThanOrEqual(12 + 4)
   })
+
+  it('a second split across two consecutive batches keeps its last trade in each batch', () => {
+    // Second 1 spans both batches: batch A ends mid-second, batch B finishes it and starts second 2.
+    const batchA = spread(40, 1_000, 1_500)
+    const batchB = spread(40, 1_500, 2_500, 41)
+    const keptA = compactTrades(batchA, 3).items
+    const keptB = compactTrades(batchB, 3).items
+    // A's closer (its newest trade) moves the open point; B's closer of second 1 sets its final value.
+    expect(keptA.at(-1)).toEqual(batchA.at(-1))
+    const lastOfSecond1InB = batchB.filter((t) => t.ts < 2_000).at(-1)
+    expect(keptB).toContainEqual(lastOfSecond1InB)
+    // Applied in order (as ChartFeeder does), the final value of second 1 equals the full stream's.
+    const finalValue = (trades: readonly Trade[], second: number): number | 'none' =>
+      trades.filter((t) => Math.floor(t.ts / 1_000) === second).at(-1)?.priceAfter ?? 'none'
+    expect(finalValue([...keptA, ...keptB], 1)).toBe(finalValue([...batchA, ...batchB], 1))
+    expect(finalValue([...keptA, ...keptB], 2)).toBe(finalValue([...batchA, ...batchB], 2))
+  })
 })
