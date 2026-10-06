@@ -53,6 +53,7 @@ async (page) => {
   const BUY_EVERY_MS = 3_000
   const CLICK_TIMEOUT_MS = 1_000
   const CLICKER_POLL_MS = 250
+  const QUOTE_SETTLE_MS = 450 // > QUOTE_REFRESH_MS (250) + a quote round trip
   const IS_SOAK = BENCH_URL.includes('bench=soak') // soak: no clicks at all, order state would distort heap growth
   const RESULT_TIMEOUT_MS = 45 * 60 * 1000
 
@@ -205,16 +206,13 @@ async (page) => {
           continue
         }
         if (IS_SOAK || !isMeasured(phase)) continue
-        const now = Date.now()
-        if (now - lastToggle >= TOGGLE_EVERY_MS) {
-          lastToggle = now
-          await click(SIDES[step % SIDES.length])
-          await click(PRESETS[step % PRESETS.length])
-          step++
-        }
-        if (!phase.startsWith('slip ') && Date.now() - lastBuy >= BUY_EVERY_MS) {
+        // Buy first, and only once the last toggle is QUOTE_SETTLE_MS old: a toggle changes side/amount, which
+        // invalidates the ticket's quote until the next refresh, so a Buy right after it always finds the button
+        // disabled.
+        const buyDue = Date.now() - lastBuy >= BUY_EVERY_MS && Date.now() - lastToggle >= QUOTE_SETTLE_MS
+        if (!phase.startsWith('slip ') && buyDue) {
           lastBuy = Date.now()
-          // Re-read right before buying: the phase may have changed during the toggle clicks above.
+          // Re-read right before buying: the phase may have changed since the read above.
           let current = ''
           try {
             current = await readPhase()
@@ -224,6 +222,13 @@ async (page) => {
           if (current !== phase || !isMeasured(current) || current.startsWith('slip ')) continue
           const enabled = await page.isEnabled(SUBMIT, { timeout: CLICK_TIMEOUT_MS }).catch(() => false)
           if (enabled && (await click(SUBMIT))) clicks.buys++
+          continue
+        }
+        if (Date.now() - lastToggle >= TOGGLE_EVERY_MS) {
+          lastToggle = Date.now()
+          await click(SIDES[step % SIDES.length])
+          await click(PRESETS[step % PRESETS.length])
+          step++
         }
       }
     })()
