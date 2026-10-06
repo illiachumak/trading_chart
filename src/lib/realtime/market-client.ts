@@ -43,6 +43,12 @@ export class MarketClient {
   private lastSeq = 0
   private readonly pending = new Map<number, ServerMessage>()
   private awaitingResync = false
+  /** A full snapshot was requested while the socket was not open (or not yet answered). */
+  private snapshotWanted = false
+  /** Consecutive unanswered resync retries; drives the exponential retry timeout. */
+  private retries = 0
+  /** True once a socket has closed since start(); the next open then counts as a reconnect. */
+  private hasClosed = false
   private readonly inflight = new Map<string, PlaceOrder>()
   private attempt = 0
   private reconnectTimer: Timer | 'none' = 'none'
@@ -92,6 +98,9 @@ export class MarketClient {
     this.pending.clear()
     this.inflight.clear()
     this.awaitingResync = false
+    this.snapshotWanted = false
+    this.retries = 0
+    this.hasClosed = false
     this.attempt = 0
     this.setStatus('idle')
   }
@@ -107,7 +116,8 @@ export class MarketClient {
   }
 
   requestSnapshot(): void {
-    this.rawSend({ type: 'resync', fromSeq: 0 })
+    this.snapshotWanted = true
+    if (this.socketOpen) this.rawSend({ type: 'resync', fromSeq: 0 })
   }
 
   private connect(status: 'connecting' | 'reconnecting'): void {
@@ -130,8 +140,10 @@ export class MarketClient {
   private handleOpen(): void {
     this.socketOpen = true
     this.attempt = 0
+    this.retries = 0
+    if (this.hasClosed) this.stats.reconnects++
     this.setStatus('resyncing')
-    this.requestResync()
+    this.requestResync(false)
   }
 
   private handleClose(): void {
@@ -139,7 +151,7 @@ export class MarketClient {
     this.socket = 'none'
     this.socketOpen = false
     this.clearResyncTimer()
-    this.stats.reconnects++
+    this.hasClosed = true
     const ceiling = Math.min(this.options.backoffMaxMs, this.options.backoffBaseMs * 2 ** this.attempt)
     this.attempt++
     this.setStatus('reconnecting')
@@ -149,15 +161,19 @@ export class MarketClient {
     }, this.options.random() * ceiling)
   }
 
-  private requestResync(): void {
+  /** `counted` is false for the handshake resync sent on open. */
+  private requestResync(counted: boolean): void {
     this.awaitingResync = true
-    this.stats.resyncs++
-    this.rawSend({ type: 'resync', fromSeq: this.lastSeq + 1 })
+    if (counted) this.stats.resyncs++
+    this.rawSend({ type: 'resync', fromSeq: this.snapshotWanted ? 0 : this.lastSeq + 1 })
     this.clearResyncTimer()
     this.resyncTimer = setTimeout(() => {
       this.resyncTimer = 'none'
-      if (this.awaitingResync && this.socketOpen) this.requestResync()
-    }, this.options.resyncTimeoutMs)
+      if (this.awaitingResync && this.socketOpen) {
+        this.retries++
+        this.requestResync(true)
+      }
+    }, this.options.resyncTimeoutMs * Math.min(8, 2 ** this.retries))
   }
 
   private handleData(data: string): void {
@@ -180,7 +196,7 @@ export class MarketClient {
     this.pending.set(message.seq, message)
     if (!this.awaitingResync) {
       this.stats.gaps++
-      this.requestResync()
+      this.requestResync(true)
     }
   }
 
@@ -190,6 +206,7 @@ export class MarketClient {
       return
     }
     this.lastSeq = snapshot.seq
+    this.snapshotWanted = false
     for (const seq of this.pending.keys()) {
       if (seq <= snapshot.seq) this.pending.delete(seq)
     }
@@ -210,6 +227,7 @@ export class MarketClient {
   private caughtUp(): void {
     const afterConnect = this.status === 'resyncing'
     this.awaitingResync = false
+    this.retries = 0
     this.clearResyncTimer()
     this.setStatus('live')
     if (afterConnect) {
