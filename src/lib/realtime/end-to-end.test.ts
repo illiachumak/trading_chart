@@ -65,7 +65,7 @@ describe('client + mock server end to end', () => {
       side: 'yes',
       amountUsd: 10,
       expectedPrice: 0.99,
-      maxSlippage: 0.5,
+      maxSlippage: 0.1,
     })
     dev({ kind: 'force_disconnect' })
     await vi.advanceTimersByTimeAsync(3_000)
@@ -104,6 +104,78 @@ describe('client + mock server end to end', () => {
     expect(truth.round.id).toBe(2)
     expect(truth.history.length).toBeGreaterThan(0)
     expect(feeder.getHistory()).toEqual(truth.history)
+    client.stop()
+    feeder.dispose()
+  })
+
+  it('compact aggregation at 5,000 trades/s and 16 ms batches still rebuilds the exact server chart', async () => {
+    // Short rounds so the run also crosses round boundaries (rollover flushes are compacted too).
+    const config = { ...DEFAULT_SERVER_CONFIG, tradesPerSec: 5_000, batchIntervalMs: 16, roundMs: 4_000 }
+    expect(config.aggregation).toBe('compact')
+    const { worker, server, pause } = createInProcessWorker(config, 11)
+    const client = new MarketClient({
+      createSocket: createWorkerSocketFactory(worker),
+      random: () => 0.5,
+      backoffBaseMs: 100,
+      backoffMaxMs: 1_000,
+      resyncTimeoutMs: 300,
+      maxPendingMessages: 5_000,
+    })
+    const feeder = new ChartFeeder(
+      { update: () => {}, setData: () => {} },
+      {
+        scheduler: {
+          request: (callback) => {
+            const timer = setTimeout(callback, 16)
+            return () => clearTimeout(timer)
+          },
+        },
+        perfNow: () => 0,
+        serverNow: () => Date.now(),
+        backlogThreshold: 30,
+        onFlush: () => {},
+      },
+    )
+    client.onMessage((message) => feeder.handle(message))
+    let lastPrice = 0
+    const userTrades: string[] = []
+    client.onMessage((message) => {
+      if (message.type !== 'trades') return
+      lastPrice = message.items.at(-1)?.priceAfter ?? lastPrice
+      for (const trade of message.items) if (trade.source === 'user') userTrades.push(trade.clientOrderId)
+    })
+    const account = new AccountStore()
+    account.attach(client)
+
+    client.start()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(client.getStatus()).toBe('live')
+    const startStats = { ...client.stats }
+    account.placeOrder({
+      clientOrderId: 'compact-order',
+      roundId: server.getSnapshot().round.id,
+      side: 'yes',
+      amountUsd: 10,
+      expectedPrice: 0.99,
+      maxSlippage: 0.1,
+    })
+    await vi.advanceTimersByTimeAsync(5_500)
+    pause()
+    await vi.advanceTimersByTimeAsync(500)
+
+    const trades = client.stats.trades - startStats.trades
+    const items = client.stats.tradeItems - startStats.tradeItems
+    expect(trades).toBeGreaterThan(20_000)
+    // ~80 trades per 16 ms batch, of which the newest 12 plus second-closers and user trades ship.
+    expect(items * 4).toBeLessThan(trades)
+    expect(client.getLastSeq()).toBe(server.getLastSeq())
+    const truth = server.getSnapshot()
+    expect(truth.round.id).toBeGreaterThan(1)
+    expect(truth.history.length).toBeGreaterThan(1)
+    expect(feeder.getHistory()).toEqual(truth.history)
+    expect(lastPrice).toBe(truth.price)
+    // User trades are never aggregated away.
+    expect(userTrades).toEqual(['compact-order'])
     client.stop()
     feeder.dispose()
   })

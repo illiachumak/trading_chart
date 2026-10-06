@@ -55,7 +55,7 @@ describe('describeOrderResult', () => {
     expect(new Set(texts).size).toBe(reasons.length)
     expect(describeOrderResult(reject('slippage'))).toEqual({
       tone: 'warn',
-      text: 'YES price moved to 62.0¢ before your order filled — not executed',
+      text: 'YES price moved to 62.0¢ before your order filled — not executed. Try a higher max slippage.',
     })
     expect(describeOrderResult(reject('round_closed')).text).toBe('Round closed before your order arrived')
   })

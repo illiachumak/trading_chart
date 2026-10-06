@@ -2,6 +2,8 @@
 
 export const ROUND_MS = 60_000
 export const BATCH_INTERVAL_MS = 100
+export const MIN_BATCH_INTERVAL_MS = 4
+export const MAX_BATCH_INTERVAL_MS = 1_000
 export const HEARTBEAT_INTERVAL_MS = 1_000
 
 /** LMSR liquidity `b`. ~15 shares at 50% move the price by ~0.1¢. */
@@ -12,7 +14,12 @@ export const PRICE_BOUND = 0.85
 export const START_BALANCE = 1_000
 export const DEFAULT_TRADES_PER_SEC = 30
 export const MIN_TRADES_PER_SEC = 1
-export const MAX_TRADES_PER_SEC = 1_000
+export const MAX_TRADES_PER_SEC = 20_000
+
+/** Server aggregation default; 'full' ships every trade (see AggregationMode). */
+export const DEFAULT_AGGREGATION = 'compact'
+/** Compact mode: newest trades shipped per batch for the trade feed (RECENT_TRADES_LIMIT shows 20 across batches). */
+export const FEED_TRADES_PER_BATCH = 12
 
 export const REPLAY_BUFFER_SIZE = 5_000
 export const RECENT_TRADES_LIMIT = 20
@@ -37,8 +44,17 @@ export const PERF_SAMPLE_CAPACITY = 4_000
 
 // UI
 export const QUOTE_DEBOUNCE_MS = 150
-export const QUOTE_REFRESH_MS = 1_000
-export const DEFAULT_MAX_SLIPPAGE = 0.02
+// Fill rate at the default 3c slippage depends on quote age: with a fresh quote it is
+// 100%/97%/91% at 100/500/1000 trades/s, with 250 ms old quotes 97%/84%/73%; at 1 s refresh quotes were up to 1 s old.
+export const QUOTE_REFRESH_MS = 250
+/** Absolute slippage tolerance in price units (0.03 = 3¢). */
+export const DEFAULT_MAX_SLIPPAGE = 0.03
+export const MAX_SLIPPAGE = 0.1
+export const SLIPPAGE_OPTIONS = [0.03, 0.05, 0.1] as const
+/** Every interval the bench may use; all within [MIN_BATCH_INTERVAL_MS, MAX_BATCH_INTERVAL_MS]. */
+export const BATCH_INTERVAL_OPTIONS = [4, 8, 16, 33, 50, 100, 250] as const
+/** Dev panel pills: 4 ms is bench-only. */
+export const DEV_BATCH_INTERVAL_OPTIONS = [8, 16, 33, 50, 100, 250] as const
 export const STRESS_TRADES_PER_SEC = 500
 export const HUD_REFRESH_MS = 500
 /** Dev panel slider ranges — narrower than the server limits (MAX_LATENCY_MS, MAX_DROP_RATE) for usable steps. */

@@ -16,6 +16,16 @@ export type Trade =
   | (TradeBase & { source: 'mock' })
   | (TradeBase & { source: 'user'; clientOrderId: string })
 
+/** Trades the server left out of a compacted `trades` batch, summarised. */
+export type TradeAggregate = { count: number; volumeShares: number }
+
+/**
+ * 'full': every trade is shipped. 'compact': per batch only the last trade of each second
+ * (the chart point), the newest few trades (the feed) and all user trades are shipped;
+ * the rest is summarised in `aggregated`.
+ */
+export type AggregationMode = 'full' | 'compact'
+
 export type Position = {
   yesShares: number
   noShares: number
@@ -67,6 +77,12 @@ export type DevCommand =
   | { kind: 'set_rate'; tradesPerSec: number }
   | { kind: 'set_latency'; ms: number }
   | { kind: 'set_drop_rate'; rate: number }
+  | { kind: 'set_batch_interval'; ms: number }
+  | { kind: 'set_aggregation'; mode: AggregationMode }
+  /** Dev/bench only: the server answers with a `server_stats` payload. */
+  | { kind: 'report_server_stats' }
+  /** Dev/bench only: overwrites the cash balance, which breaks the starting-capital invariant (START_BALANCE). */
+  | { kind: 'set_balance'; usd: number }
   | { kind: 'force_disconnect' }
 
 export type PlaceOrder = {
@@ -78,7 +94,7 @@ export type PlaceOrder = {
   amountUsd: number
   /** Average price the user saw (from the latest quote). */
   expectedPrice: number
-  /** Allowed relative worsening of the average price, e.g. 0.02 = 2%. */
+  /** Allowed absolute worsening of the average price in price units, e.g. 0.03 = 3¢. */
   maxSlippage: number
 }
 
@@ -91,13 +107,25 @@ export type ClientMessage =
   | { type: 'dev'; command: DevCommand }
 
 export type ServerPayload =
-  | { type: 'trades'; ts: number; items: readonly Trade[] }
+  | {
+      type: 'trades'
+      ts: number
+      /** ts-ordered. In compact mode a subset of the batch (see AggregationMode). */
+      items: readonly Trade[]
+      /** Trades omitted from `items`; 'none' when every trade of the batch is in `items`. */
+      aggregated: TradeAggregate | 'none'
+    }
   | { type: 'round_started'; ts: number; round: RoundInfo; price: number }
   | { type: 'round_resolved'; ts: number; roundId: number; outcome: Side; payout: number }
   | { type: 'order_result'; ts: number; result: OrderResult }
   | { type: 'quote_result'; ts: number; quote: QuoteResult }
   | { type: 'account'; ts: number; account: Account }
   | { type: 'heartbeat'; ts: number }
+  /**
+   * Dev/bench only, sent on `report_server_stats`. Cumulative `tick()` count and wall time (ms)
+   * since the server started; `tickMsMax` is the longest tick since the previous report.
+   */
+  | { type: 'server_stats'; ts: number; tickCount: number; tickMsTotal: number; tickMsMax: number }
 
 export type SnapshotPayload = {
   type: 'snapshot'
@@ -128,6 +156,7 @@ const SERVER_TYPES: ReadonlySet<string> = new Set([
   'quote_result',
   'account',
   'heartbeat',
+  'server_stats',
 ])
 
 // Shallow guard: the payload comes from our own backend, we only verify the envelope.
@@ -158,6 +187,13 @@ function isDevCommand(value: unknown): value is DevCommand {
       return isNumber(value.ms)
     case 'set_drop_rate':
       return isNumber(value.rate)
+    case 'set_batch_interval':
+      return typeof value.ms === 'number' && Number.isFinite(value.ms)
+    case 'set_aggregation':
+      return value.mode === 'full' || value.mode === 'compact'
+    case 'set_balance':
+      return typeof value.usd === 'number' && Number.isFinite(value.usd)
+    case 'report_server_stats':
     case 'force_disconnect':
       return true
     default:

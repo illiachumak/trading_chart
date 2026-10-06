@@ -2,11 +2,17 @@
 // serves resyncs, and can inject latency / drops / disconnects for demos and tests.
 
 import {
+  DEFAULT_AGGREGATION,
   DEFAULT_TRADES_PER_SEC,
+  BATCH_INTERVAL_MS,
+  FEED_TRADES_PER_BATCH,
   HEARTBEAT_INTERVAL_MS,
   LMSR_LIQUIDITY,
+  MAX_BATCH_INTERVAL_MS,
   MAX_DROP_RATE,
   MAX_LATENCY_MS,
+  MAX_SLIPPAGE,
+  MIN_BATCH_INTERVAL_MS,
   ORDER_RESULT_CACHE_SIZE,
   PRICE_BOUND,
   RECENT_TRADES_LIMIT,
@@ -17,6 +23,7 @@ import {
 } from '@/config/market'
 import type { MainToWorker, WorkerToMain } from '@/lib/realtime/bridge'
 import {
+  type AggregationMode,
   type ClientMessage,
   type DevCommand,
   parseClientMessage,
@@ -27,28 +34,41 @@ import {
 import { type EngineConfig, MarketEngine } from '@/server/market-engine'
 import { ArrivalGenerator, MEAN_REVERTING_TRADERS } from '@/server/mock-traders'
 import { Outbox } from '@/server/outbox'
+import { compactTrades } from '@/server/trade-compaction'
 import { createCoinflipResolver } from '@/server/resolvers/coinflip-resolver'
 import { createRng, type Rng } from '@/server/rng'
 
 export type MockServerDeps = {
   post: (message: WorkerToMain) => void
   now: () => number
+  /** Monotonic clock for tick timing only (performance.now in the worker). */
+  perfNow: () => number
   rng: Rng
   schedule: (fn: () => void, ms: number) => void
 }
 
-export type ServerConfig = EngineConfig & { tradesPerSec: number; replayCapacity: number }
+export type ServerConfig = EngineConfig & {
+  tradesPerSec: number
+  replayCapacity: number
+  /** Initial interval between `trades` batches; changeable at runtime via a dev command. */
+  batchIntervalMs: number
+  /** Initial `trades` aggregation; changeable at runtime via a dev command. */
+  aggregation: AggregationMode
+}
 
 export const DEFAULT_SERVER_CONFIG: ServerConfig = {
   liquidity: LMSR_LIQUIDITY,
   priceBound: PRICE_BOUND,
   startBalance: START_BALANCE,
+  maxSlippage: MAX_SLIPPAGE,
   roundMs: ROUND_MS,
   recentTradesLimit: RECENT_TRADES_LIMIT,
   roundHistoryLimit: ROUND_HISTORY_LIMIT,
   orderResultCacheLimit: ORDER_RESULT_CACHE_SIZE,
   tradesPerSec: DEFAULT_TRADES_PER_SEC,
   replayCapacity: REPLAY_BUFFER_SIZE,
+  batchIntervalMs: BATCH_INTERVAL_MS,
+  aggregation: DEFAULT_AGGREGATION,
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -67,12 +87,20 @@ export class MockServer {
   private readonly faultRng: Rng
   private latencyMs = 0
   private dropRate = 0
+  private batchIntervalMs: number
+  private aggregation: AggregationMode
   private lastPublishAt: number
+  /** Tick timing for the bench (`report_server_stats`): two clock reads per tick. */
+  private tickCount = 0
+  private tickMsTotal = 0
+  private tickMsMax = 0
   /** Per-connection FIFO of delayed messages; drained by a single timer per connection. */
   private readonly pending = new Map<number, PendingDelivery[]>()
 
   constructor(deps: MockServerDeps, config: ServerConfig) {
     this.deps = deps
+    this.batchIntervalMs = config.batchIntervalMs
+    this.aggregation = config.aggregation
     this.faultRng = createRng(Math.floor(deps.rng() * 4_294_967_296))
     const now = deps.now()
     this.engine = new MarketEngine(
@@ -115,11 +143,27 @@ export class MockServer {
     }
   }
 
-  /** Called every BATCH_INTERVAL_MS: generate mock arrivals, execute due events, broadcast. */
+  /** Current delay between `tick()` calls; the host loop re-reads it after every tick. */
+  getBatchIntervalMs(): number {
+    return this.batchIntervalMs
+  }
+
+  /** Called every `getBatchIntervalMs()`: generate mock arrivals, execute due events, broadcast. */
   tick(): void {
+    const startedAt = this.deps.perfNow()
     const now = this.deps.now()
     for (const arrival of this.arrivals.generate(now)) this.engine.enqueueMock(arrival.ts, arrival.shares)
-    for (const payload of this.engine.advance(now)) this.broadcast(this.publish(payload))
+    for (const payload of this.engine.advance(now)) this.broadcast(this.publish(this.aggregate(payload)))
+    const elapsed = this.deps.perfNow() - startedAt
+    this.tickCount++
+    this.tickMsTotal += elapsed
+    if (elapsed > this.tickMsMax) this.tickMsMax = elapsed
+  }
+
+  /** Compaction happens before publish, so replays carry exactly what live clients got. */
+  private aggregate(payload: ServerPayload): ServerPayload {
+    if (payload.type !== 'trades' || this.aggregation === 'full') return payload
+    return { ...payload, ...compactTrades(payload.items, FEED_TRADES_PER_BATCH) }
   }
 
   /** Sent only when nothing else went out during the last heartbeat interval. */
@@ -176,6 +220,25 @@ export class MockServer {
       case 'set_drop_rate':
         this.dropRate = clamp(command.rate, 0, MAX_DROP_RATE)
         return
+      case 'set_batch_interval':
+        this.batchIntervalMs = clamp(command.ms, MIN_BATCH_INTERVAL_MS, MAX_BATCH_INTERVAL_MS)
+        return
+      case 'set_aggregation':
+        this.aggregation = command.mode
+        return
+      case 'set_balance': {
+        this.engine.setBalance(command.usd)
+        const ts = this.deps.now()
+        this.broadcast(this.publish({ type: 'account', ts, account: this.engine.getAccount() }))
+        return
+      }
+      case 'report_server_stats': {
+        // Dev-only: broadcast through the sequenced stream; a real backend would answer per connection / out of band.
+        const { tickCount, tickMsTotal, tickMsMax } = this
+        this.tickMsMax = 0
+        this.broadcast(this.publish({ type: 'server_stats', ts: this.deps.now(), tickCount, tickMsTotal, tickMsMax }))
+        return
+      }
       case 'force_disconnect':
         for (const connId of this.connections) this.deps.post({ kind: 'closed', connId })
         this.connections.clear()

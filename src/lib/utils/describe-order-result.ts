@@ -30,7 +30,7 @@ export function describeOrderResult(result: OrderResult): OrderMessage {
       if (result.reason === 'slippage') {
         return {
           tone: 'warn',
-          text: `${SIDE_LABEL[result.side]} price moved to ${formatCents(result.currentPrice)} before your order filled — not executed`,
+          text: `${SIDE_LABEL[result.side]} price moved to ${formatCents(result.currentPrice)} before your order filled — not executed. Try a higher max slippage.`,
         }
       }
       return { tone: 'warn', text: REJECTION_TEXT[result.reason] }

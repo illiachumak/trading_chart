@@ -9,12 +9,18 @@ import {
   type ServerMessage,
 } from '@/lib/realtime/protocol'
 import type { Socket, SocketFactory } from '@/lib/realtime/socket'
+import { isRecord } from '@/lib/utils/is-record'
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'resyncing' | 'live' | 'reconnecting'
 
 export type ClientStats = {
   messages: number
+  /** Trades the server reported: shipped items plus those summarised in `aggregated`. */
   trades: number
+  /** Trades actually shipped as `items` (equals `trades` in full aggregation mode). */
+  tradeItems: number
+  /** Sum of raw message string lengths, including duplicates and unparsable data (~bytes for ASCII JSON). */
+  bytes: number
   gaps: number
   resyncs: number
   duplicates: number
@@ -32,10 +38,24 @@ export type MarketClientOptions = {
 }
 
 type Timer = ReturnType<typeof setTimeout>
+
+/** The server-message guard checks only the envelope, so a missing or malformed aggregate counts as none. */
+function aggregatedCount(aggregated: unknown): number {
+  return isRecord(aggregated) && typeof aggregated.count === 'number' ? aggregated.count : 0
+}
 type SnapshotMessage = Extract<ServerMessage, { type: 'snapshot' }>
 
 export class MarketClient {
-  readonly stats: ClientStats = { messages: 0, trades: 0, gaps: 0, resyncs: 0, duplicates: 0, reconnects: 0 }
+  readonly stats: ClientStats = {
+    messages: 0,
+    trades: 0,
+    tradeItems: 0,
+    bytes: 0,
+    gaps: 0,
+    resyncs: 0,
+    duplicates: 0,
+    reconnects: 0,
+  }
   private readonly options: MarketClientOptions
   private status: ConnectionStatus = 'idle'
   private socket: Socket | 'none' = 'none'
@@ -184,6 +204,7 @@ export class MarketClient {
   }
 
   private handleData(data: string): void {
+    this.stats.bytes += data.length
     const message = parseServerMessage(data)
     if (message === 'invalid') return
     this.stats.messages++
@@ -254,7 +275,10 @@ export class MarketClient {
 
   private apply(message: ServerMessage): void {
     this.lastSeq = message.seq
-    if (message.type === 'trades') this.stats.trades += message.items.length
+    if (message.type === 'trades') {
+      this.stats.tradeItems += message.items.length
+      this.stats.trades += message.items.length + aggregatedCount(message.aggregated)
+    }
     if (message.type === 'order_result') this.inflight.delete(message.result.clientOrderId)
     this.deliver(message)
   }

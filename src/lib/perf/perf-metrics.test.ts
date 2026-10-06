@@ -102,4 +102,14 @@ describe('PerfMetrics', () => {
     expect(metrics.snapshot().flushMax).toBe(0)
     expect(metrics.snapshot().totals.flushes).toBe(1)
   })
+
+  it('tracks the long-task max per window: clearSamples resets it, the all-time max is kept', () => {
+    const metrics = new PerfMetrics(100)
+    metrics.recordLongTask(300)
+    metrics.clearSamples()
+    expect(metrics.snapshot().windowLongTaskMaxMs).toBe(0)
+    metrics.recordLongTask(80)
+    expect(metrics.snapshot().windowLongTaskMaxMs).toBe(80)
+    expect(metrics.snapshot().totals.longTaskMaxMs).toBe(300)
+  })
 })

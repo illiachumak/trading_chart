@@ -25,6 +25,8 @@ export type EngineConfig = {
   liquidity: number
   priceBound: number
   startBalance: number
+  /** Largest accepted `PlaceOrder.maxSlippage` (absolute price units). */
+  maxSlippage: number
   roundMs: number
   recentTradesLimit: number
   roundHistoryLimit: number
@@ -126,7 +128,7 @@ export class MarketEngine {
     let accountDirty = false
 
     const flush = (ts: number): void => {
-      if (trades.length > 0) out.push({ type: 'trades', ts, items: trades })
+      if (trades.length > 0) out.push({ type: 'trades', ts, items: trades, aggregated: 'none' })
       for (const result of results) out.push({ type: 'order_result', ts, result })
       if (accountDirty) out.push({ type: 'account', ts, account: this.account() })
       trades = []
@@ -163,6 +165,16 @@ export class MarketEngine {
     rollover(now)
     flush(now)
     return out
+  }
+
+  /** Dev/bench helper: overwrites the cash balance. Non-finite or negative values are ignored. */
+  setBalance(usd: number): void {
+    if (Number.isFinite(usd) && usd >= 0) this.balance = usd
+  }
+
+  /** Current account state (what an `account` payload carries). */
+  getAccount(): Account {
+    return this.account()
   }
 
   snapshot(now: number): SnapshotPayload {
@@ -232,7 +244,8 @@ export class MarketEngine {
       !isPositiveFinite(amountUsd) ||
       !isPositiveFinite(request.expectedPrice) ||
       !Number.isFinite(request.maxSlippage) ||
-      request.maxSlippage < 0
+      request.maxSlippage < 0 ||
+      request.maxSlippage > this.config.maxSlippage
     ) {
       return reject('invalid')
     }
@@ -241,7 +254,7 @@ export class MarketEngine {
     const fill = buyWithBudget(this.diff, side, amountUsd, this.config.liquidity, this.config.priceBound)
     if (fill.shares <= EPSILON) return reject('price_limit')
     const avgPrice = fill.cost / fill.shares
-    if (avgPrice > request.expectedPrice * (1 + request.maxSlippage) + EPSILON) return reject('slippage')
+    if (avgPrice > request.expectedPrice + request.maxSlippage + EPSILON) return reject('slippage')
 
     this.diff = fill.diffAfter
     this.balance -= fill.cost

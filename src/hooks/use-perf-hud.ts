@@ -7,7 +7,7 @@ import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
 import { ratesPerSecond } from '@/lib/perf/rates'
 
-export type HudField = 'fps' | 'frame' | 'flush' | 'latency' | 'ticks' | 'msgs' | 'trades' | 'commits' | 'longTasks' | 'net'
+export type HudField = 'fps' | 'frame' | 'flush' | 'latency' | 'ticks' | 'msgs' | 'trades' | 'items' | 'kb' | 'commits' | 'longTasks' | 'net'
 
 export function usePerfHud(write: (field: HudField, text: string) => void): void {
   const runtime = useMarketRuntime()
@@ -24,8 +24,8 @@ export function usePerfHud(write: (field: HudField, text: string) => void): void
       const snap = perfMetrics.snapshot()
       const stats = { ...runtime.client.stats }
       const perSecond = ratesPerSecond(
-        { messages: stats.messages, trades: stats.trades },
-        { messages: previousStats.messages, trades: previousStats.trades },
+        { messages: stats.messages, trades: stats.trades, items: stats.tradeItems, bytes: stats.bytes },
+        { messages: previousStats.messages, trades: previousStats.trades, items: previousStats.tradeItems, bytes: previousStats.bytes },
         elapsed,
       )
       const commitRates = ratesPerSecond(snap.totals.commits, previousCommits, elapsed)
@@ -37,6 +37,8 @@ export function usePerfHud(write: (field: HudField, text: string) => void): void
       write('ticks', `${snap.ticksPerFlushP50} / flush · setData ${snap.totals.setDataFlushes}`)
       write('msgs', `${perSecond.messages.toFixed(0)}/s`)
       write('trades', `${perSecond.trades.toFixed(0)}/s`)
+      write('items', `${perSecond.items.toFixed(0)}/s`)
+      write('kb', `${(perSecond.bytes / 1024).toFixed(1)} KB/s`)
       write(
         'commits',
         Object.entries(commitRates)

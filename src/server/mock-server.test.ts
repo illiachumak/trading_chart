@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { BATCH_INTERVAL_MS, FEED_TRADES_PER_BATCH, MAX_BATCH_INTERVAL_MS, MIN_BATCH_INTERVAL_MS } from '@/config/market'
 import type { WorkerToMain } from '@/lib/realtime/bridge'
 import { type ClientMessage, parseServerMessage, type ServerMessage } from '@/lib/realtime/protocol'
 import { DEFAULT_SERVER_CONFIG, MockServer, type ServerConfig } from '@/server/mock-server'
@@ -9,6 +10,8 @@ type Timer = { fn: () => void; due: number; order: number }
 /** `timerJitterMs` makes timers fire late, like real `setTimeout` under load. */
 function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
   let now = 0
+  /** Fake monotonic clock: every read advances it by 3 ms, so each tick measures exactly 3 ms. */
+  let perf = 0
   let timerOrder = 0
   const posted: WorkerToMain[] = []
   const deliveredAt: number[] = []
@@ -20,6 +23,7 @@ function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
         deliveredAt.push(now)
       },
       now: () => now,
+      perfNow: () => (perf += 3),
       rng: createRng(42),
       schedule: (fn, ms) => timers.push({ fn, due: now + ms + timerJitterMs, order: timerOrder++ }),
     },
@@ -67,6 +71,76 @@ function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
 }
 
 describe('MockServer', () => {
+  it('reports the configured batch interval and clamps dev changes to the allowed range', () => {
+    const t = setup()
+    expect(t.server.getBatchIntervalMs()).toBe(BATCH_INTERVAL_MS)
+    t.connect(1)
+    const setMs = (ms: number) => t.send(1, { type: 'dev', command: { kind: 'set_batch_interval', ms } })
+    setMs(33)
+    expect(t.server.getBatchIntervalMs()).toBe(33)
+    setMs(1)
+    expect(t.server.getBatchIntervalMs()).toBe(MIN_BATCH_INTERVAL_MS)
+    setMs(60_000)
+    expect(t.server.getBatchIntervalMs()).toBe(MAX_BATCH_INTERVAL_MS)
+    expect(setup({ batchIntervalMs: 50 }).server.getBatchIntervalMs()).toBe(50)
+  })
+
+  it('set_balance publishes an account payload with the new balance', () => {
+    const t = setup()
+    t.connect(1)
+    t.send(1, { type: 'dev', command: { kind: 'set_balance', usd: 250 } })
+    const accounts = t.messagesFor(1).flatMap((m) => (m.type === 'account' ? [m.account] : []))
+    expect(accounts.at(-1)?.balance).toBe(250)
+    t.send(1, { type: 'dev', command: { kind: 'set_balance', usd: -5 } })
+    expect(t.messagesFor(1).flatMap((m) => (m.type === 'account' ? [m.account] : [])).at(-1)?.balance).toBe(250)
+  })
+
+  it('compacts trade batches by default and ships every trade in full mode', () => {
+    const t = setup({ tradesPerSec: 5_000 })
+    expect(DEFAULT_SERVER_CONFIG.aggregation).toBe('compact')
+    t.connect(1)
+    t.tickFor(1_000)
+    const batches = (): Extract<ServerMessage, { type: 'trades' }>[] =>
+      t.messagesFor(1).flatMap((m) => (m.type === 'trades' ? [m] : []))
+    const compact = batches()
+    expect(compact.length).toBeGreaterThan(5)
+    let represented = 0
+    for (const batch of compact) {
+      expect(batch.items.length).toBeLessThanOrEqual(FEED_TRADES_PER_BATCH + 2)
+      if (batch.aggregated === 'none') throw new Error('a ~500-trade batch must be aggregated')
+      expect(batch.aggregated.count).toBeGreaterThan(300)
+      represented += batch.items.length + batch.aggregated.count
+    }
+    // Trade ids start at 1 and the newest trade of a batch is always shipped: nothing is lost.
+    expect(represented).toBe(compact.at(-1)?.items.at(-1)?.id)
+    t.posted.length = 0
+    t.send(1, { type: 'dev', command: { kind: 'set_aggregation', mode: 'full' } })
+    t.tickFor(500)
+    const full = batches()
+    expect(full.length).toBeGreaterThan(3)
+    for (const batch of full) {
+      expect(batch.aggregated).toBe('none')
+      expect(batch.items.length).toBeGreaterThan(300)
+    }
+  })
+
+  it('accumulates tick timing and reports it on request (max resets per report)', () => {
+    const t = setup()
+    t.connect(1)
+    const report = () => {
+      t.posted.length = 0
+      t.send(1, { type: 'dev', command: { kind: 'report_server_stats' } })
+      const stats = t.messagesFor(1).filter((m) => m.type === 'server_stats')
+      expect(stats).toHaveLength(1)
+      return stats[0]
+    }
+    t.tickFor(1_000)
+    expect(report()).toMatchObject({ type: 'server_stats', tickCount: 10, tickMsTotal: 30, tickMsMax: 3 })
+    expect(report()).toMatchObject({ tickCount: 10, tickMsTotal: 30, tickMsMax: 0 })
+    t.tickFor(500)
+    expect(report()).toMatchObject({ tickCount: 15, tickMsTotal: 45, tickMsMax: 3 })
+  })
+
   it('acknowledges a connection', () => {
     const t = setup()
     t.connect(1)
@@ -111,7 +185,7 @@ describe('MockServer', () => {
       side: 'yes',
       amountUsd: 25,
       expectedPrice: quoteMsg.quote.avgPrice,
-      maxSlippage: 0.5,
+      maxSlippage: 0.1,
     })
     t.tickFor(100)
     const result = t.messagesFor(1).find((m) => m.type === 'order_result')

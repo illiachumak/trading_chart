@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PlaceOrder, ServerPayload } from '@/lib/realtime/protocol'
+import type { PlaceOrder, ServerPayload, Side } from '@/lib/realtime/protocol'
 import { type EngineConfig, MarketEngine } from '@/server/market-engine'
 import type { MockTraderModel } from '@/server/mock-traders'
 import type { Resolver } from '@/server/resolvers/types'
@@ -9,6 +9,7 @@ const CONFIG: EngineConfig = {
   liquidity: 3_000,
   priceBound: 0.85,
   startBalance: 1_000,
+  maxSlippage: 0.1,
   roundMs: 60_000,
   recentTradesLimit: 20,
   roundHistoryLimit: 20,
@@ -31,7 +32,7 @@ function order(overrides: Partial<PlaceOrder> = {}): PlaceOrder {
     side: 'yes',
     amountUsd: 100,
     expectedPrice: 0.6,
-    maxSlippage: 0.02,
+    maxSlippage: 0.03,
     ...overrides,
   }
 }
@@ -42,6 +43,29 @@ function ofType<T extends ServerPayload['type']>(
 ): Extract<ServerPayload, { type: T }>[] {
   return out.filter((p): p is Extract<ServerPayload, { type: T }> => p.type === type)
 }
+
+describe('MarketEngine.setBalance', () => {
+  it('overwrites the balance, ignoring negative and non-finite values', () => {
+    const engine = makeEngine()
+    engine.setBalance(40)
+    expect(engine.getAccount().balance).toBe(40)
+    engine.setBalance(-1)
+    engine.setBalance(Number.NaN)
+    expect(engine.getAccount().balance).toBe(40)
+    engine.setBalance(0)
+    expect(engine.getAccount().balance).toBe(0)
+  })
+
+  it('lets an order go through after a top-up', () => {
+    const engine = makeEngine()
+    engine.setBalance(0)
+    engine.enqueueOrder(1, order())
+    expect(ofType(engine.advance(2), 'order_result')[0].result).toMatchObject({ status: 'rejected', reason: 'insufficient_balance' })
+    engine.setBalance(1_000)
+    engine.enqueueOrder(3, order({ clientOrderId: 'o2' }))
+    expect(ofType(engine.advance(4), 'order_result')[0].result.status).toBe('filled')
+  })
+})
 
 describe('MarketEngine', () => {
   it('opens round 1 at 50% with a single start point', () => {
@@ -109,6 +133,71 @@ describe('MarketEngine', () => {
     expect(result).toMatchObject({ status: 'rejected', reason: 'slippage' })
     if (result.status !== 'rejected') throw new Error('expected rejection')
     expect(result.currentPrice).toBeCloseTo(engine.getPrice(), 12)
+  })
+
+  it('fills when the price moved by less than the absolute tolerance', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
+    engine.enqueueMock(999, 150) // moves the average by roughly 1-2 cents
+    const [{ result }] = ofType(engine.advance(1_000), 'order_result')
+    if (result.status !== 'filled') throw new Error(`expected fill, got ${result.status}`)
+    const move = result.avgPrice - quote.avgPrice
+    expect(move).toBeGreaterThan(0.006)
+    expect(move).toBeLessThanOrEqual(0.03)
+  })
+
+  it('tolerance is absolute, not relative: fills near 20c where 3% of the price would be 0.6c', () => {
+    const mockSide: { current: Side } = { current: 'no' }
+    const engine = new MarketEngine(
+      CONFIG,
+      { rng: createRng(1), resolver: YES_WINS, traders: { pickSide: () => mockSide.current } },
+      0,
+    )
+    engine.enqueueMock(10, 4_000) // NO flow drives YES down to roughly 20c
+    engine.advance(10)
+    expect(engine.getPrice()).toBeLessThan(0.25)
+    mockSide.current = 'yes'
+    const quote = engine.quote(20, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    expect(quote.avgPrice).toBeLessThan(0.25)
+    engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
+    engine.enqueueMock(999, 250) // YES flow lifts the average by roughly 1-2 cents
+    const [{ result }] = ofType(engine.advance(1_000), 'order_result')
+    if (result.status !== 'filled') throw new Error(`expected fill, got ${result.status}`)
+    const move = result.avgPrice - quote.avgPrice
+    expect(move).toBeGreaterThan(quote.avgPrice * 0.03) // a relative 3% tolerance would reject
+    expect(move).toBeGreaterThan(0.006)
+    expect(move).toBeLessThanOrEqual(0.03)
+  })
+
+  it('fills at exactly expected + tolerance and accepts the maxSlippage cap', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    // The server fills at the quoted average, so expectedPrice = avg - tolerance sits exactly on the boundary.
+    engine.enqueueOrder(10, order({ clientOrderId: 'edge', expectedPrice: quote.avgPrice - 0.03, maxSlippage: 0.03 }))
+    engine.enqueueOrder(11, order({ clientOrderId: 'cap', amountUsd: 10, expectedPrice: 0.9, maxSlippage: 0.1 }))
+    const results = ofType(engine.advance(11), 'order_result').map((r) => r.result.status)
+    expect(results).toEqual(['filled', 'filled'])
+  })
+
+  it('rejects with slippage when the price moved by more than the tolerance', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.01 }))
+    engine.enqueueMock(999, 400)
+    const [{ result }] = ofType(engine.advance(1_000), 'order_result')
+    expect(result).toMatchObject({ status: 'rejected', reason: 'slippage' })
+  })
+
+  it.each([0.11, -0.01, Number.NaN])('rejects maxSlippage %s as invalid', (maxSlippage) => {
+    const engine = makeEngine()
+    engine.enqueueOrder(10, order({ maxSlippage }))
+    const [{ result }] = ofType(engine.advance(10), 'order_result')
+    expect(result).toMatchObject({ status: 'rejected', reason: 'invalid' })
   })
 
   it('a later mock trade executes after the user order', () => {

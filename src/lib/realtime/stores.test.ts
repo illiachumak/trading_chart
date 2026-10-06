@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AccountStore, type OrderRequest, selectOrder, selectQuote, selectRoundHistory } from '@/lib/realtime/account-store'
+import {
+  AccountStore,
+  type AccountStoreState,
+  hasOkQuoteFor,
+  type OrderRequest,
+  pickQuoteFor,
+  selectOrder,
+  selectQuote,
+  selectRoundHistory,
+} from '@/lib/realtime/account-store'
 import { ClockSync } from '@/lib/realtime/clock-sync'
 import {
   MarketStore,
@@ -42,7 +51,7 @@ const user = (id: number, priceAfter: number): Trade => ({
   source: 'user',
   clientOrderId: `o${id}`,
 })
-const trades = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items })
+const trades = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items, aggregated: 'none' })
 
 /** Minimal client double: records sends and lets tests emit messages and status changes. */
 function fakeClient() {
@@ -274,7 +283,7 @@ describe('MarketStore lifecycle', () => {
     market.handle(snapshot(1))
     vi.advanceTimersByTime(1_000)
     // Server clock is 5 s ahead: ts = local now + 5000.
-    market.handle({ type: 'trades', seq: 2, ts: 6_000, items: [mock(1, 0.5)] })
+    market.handle({ type: 'trades', seq: 2, ts: 6_000, items: [mock(1, 0.5)], aggregated: 'none' })
     vi.advanceTimersByTime(300)
     expect(selectClockOffset(market.store.getState())).toBe(5_000)
   })
@@ -330,6 +339,38 @@ describe('AccountStore', () => {
     account.attach(client)
     return { account, client }
   }
+
+  it('keeps the history array and position object when an account update did not change them', () => {
+    const { account, client } = attached()
+    const row = { roundId: 1, outcome: 'yes', spent: 5, payout: 8, pnl: 3 } as const
+    client.emit({ type: 'account', seq: 1, ts: 0, account: { ...ACCOUNT, history: [row] } })
+    const first = account.store.getState().account
+    if (first === 'loading') throw new Error('expected account')
+    client.emit({
+      type: 'account',
+      seq: 2,
+      ts: 0,
+      account: { ...ACCOUNT, balance: 990, history: [{ ...row }], position: { ...ACCOUNT.position } },
+    })
+    const same = account.store.getState().account
+    if (same === 'loading') throw new Error('expected account')
+    expect(same.balance).toBe(990)
+    expect(same.history).toBe(first.history)
+    expect(same.position).toBe(first.position)
+
+    client.emit({
+      type: 'account',
+      seq: 3,
+      ts: 0,
+      account: { ...ACCOUNT, history: [{ ...row, roundId: 2, pnl: -5 }, row], position: { ...ACCOUNT.position, spent: 5 } },
+    })
+    const changed = account.store.getState().account
+    if (changed === 'loading') throw new Error('expected account')
+    expect(changed.history).not.toBe(first.history)
+    expect(changed.history).toHaveLength(2)
+    expect(changed.position).not.toBe(first.position)
+    expect(selectRoundHistory(account.store.getState())).toBe(changed.history)
+  })
 
   it('tracks the account and resolves only the pending order', () => {
     const { account, client } = attached()
@@ -412,5 +453,29 @@ describe('AccountStore', () => {
     client.status('idle')
     expect(account.store.getState()).toEqual({ account: 'loading', order: { kind: 'idle' }, quote: 'none' })
     expect(() => new AccountStore().placeOrder(ORDER)).toThrow('not attached')
+  })
+})
+
+describe('pickQuoteFor / hasOkQuoteFor', () => {
+  const ok = { status: 'ok', requestId: 1, side: 'yes', amountUsd: 10, shares: 20, avgPrice: 0.5, cost: 10, potentialPayout: 20, potentialProfit: 10, clipped: false } as const
+  const unavailable = { status: 'unavailable', requestId: 2, side: 'yes', amountUsd: 10 } as const
+  const withQuote = (quote: AccountStoreState['quote']): AccountStoreState => ({ account: 'loading', order: { kind: 'idle' }, quote })
+
+  it('returns the quote for matching side and amount', () => {
+    expect(pickQuoteFor(withQuote(ok), 'yes', 10)).toBe(ok)
+    expect(hasOkQuoteFor(withQuote(ok), 'yes', 10)).toBe(true)
+  })
+
+  it('ignores other side or amount', () => {
+    expect(pickQuoteFor(withQuote(ok), 'no', 10)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 11)).toBe('none')
+    expect(hasOkQuoteFor(withQuote(ok), 'no', 10)).toBe(false)
+  })
+
+  it("is 'none' when unavailable, absent or the amount is invalid", () => {
+    expect(pickQuoteFor(withQuote('none'), 'yes', 10)).toBe('none')
+    expect(pickQuoteFor(withQuote(ok), 'yes', 'invalid')).toBe('none')
+    expect(pickQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(unavailable)
+    expect(hasOkQuoteFor(withQuote(unavailable), 'yes', 10)).toBe(false)
   })
 })

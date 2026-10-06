@@ -2,10 +2,17 @@ import { useState } from 'react'
 import { Button } from '@/components/common/button'
 import { PerfHud } from '@/components/features/perf-hud/perf-hud'
 import { Container } from '@/components/layout/container'
-import { DEV_DROP_PCT_RANGE, DEV_LATENCY_RANGE, DEV_RATE_RANGE, STRESS_TRADES_PER_SEC } from '@/config/market'
+import {
+  DEV_BATCH_INTERVAL_OPTIONS,
+  DEV_DROP_PCT_RANGE, DEV_LATENCY_RANGE, DEV_RATE_RANGE,
+  STRESS_TRADES_PER_SEC,
+} from '@/config/market'
 import { useDevControls } from '@/hooks/use-dev-controls'
+import type { AggregationMode } from '@/lib/realtime/protocol'
 
 type Range = { min: number; max: number; step: number }
+
+const AGGREGATION_OPTIONS: readonly AggregationMode[] = ['full', 'compact']
 
 export function DevPanel() {
   const controls = useDevControls()
@@ -49,6 +56,38 @@ export function DevPanel() {
                 display={`${controls.dropRatePct}%`}
                 onChange={controls.setDropRatePct}
               />
+              <div role="group" aria-labelledby="batch-label" className="flex items-center gap-2">
+                <span id="batch-label" className="text-body text-muted">
+                  Batch
+                </span>
+                {DEV_BATCH_INTERVAL_OPTIONS.map((option) => (
+                  <Button
+                    key={option}
+                    size="sm"
+                    className="font-normal"
+                    aria-pressed={option === controls.batchIntervalMs}
+                    onClick={() => controls.setBatchIntervalMs(option)}
+                  >
+                    {option} ms
+                  </Button>
+                ))}
+              </div>
+              <div role="group" aria-labelledby="aggregation-label" className="flex items-center gap-2">
+                <span id="aggregation-label" className="text-body text-muted">
+                  Trades
+                </span>
+                {AGGREGATION_OPTIONS.map((option) => (
+                  <Button
+                    key={option}
+                    size="sm"
+                    className="font-normal"
+                    aria-pressed={option === controls.aggregation}
+                    onClick={() => controls.setAggregation(option)}
+                  >
+                    {option}
+                  </Button>
+                ))}
+              </div>
               <Button
                 variant="danger"
                 onClick={controls.dropConnection}

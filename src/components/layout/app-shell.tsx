@@ -1,3 +1,5 @@
+import { BENCH_AVAILABLE } from '@/config/bench'
+import { BenchPanel } from '@/components/features/dev-tools/bench-panel'
 import { DevPanel } from '@/components/features/dev-tools/dev-panel'
 import { PriceChart } from '@/components/features/chart/price-chart'
 import { RoundHistory } from '@/components/features/round/round-history'
@@ -43,6 +45,7 @@ export function AppShell() {
       </Container>
       <ErrorBoundary name="dev-tools">
         <DevPanel />
+        {BENCH_AVAILABLE && <BenchPanel />}
       </ErrorBoundary>
     </div>
   )
