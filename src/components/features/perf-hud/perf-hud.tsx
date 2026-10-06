@@ -5,7 +5,7 @@ const ROWS: readonly { field: HudField; label: string }[] = [
   { field: 'fps', label: 'FPS' },
   { field: 'frame', label: 'Frame p50/p95' },
   { field: 'flush', label: 'Flush p50/p95/max' },
-  { field: 'latency', label: 'Tick→paint p50/p95' },
+  { field: 'dataAge', label: 'Data age p50/p95' },
   { field: 'ticks', label: 'Ticks per flush' },
   { field: 'msgs', label: 'Messages' },
   { field: 'trades', label: 'Trades (market)' },

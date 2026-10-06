@@ -22,8 +22,9 @@ export type PerfSnapshot = {
   flushP50: number
   flushP95: number
   flushMax: number
-  latencyP50: number
-  latencyP95: number
+  /** Data age at paint (server now − oldest tick of a flush), see FlushStats.dataAgeMs. */
+  dataAgeP50: number
+  dataAgeP95: number
   ticksPerFlushP50: number
   /** Longest long task since the last clearSamples() (totals.longTaskMaxMs is all-time). */
   windowLongTaskMaxMs: number
@@ -38,7 +39,7 @@ export type SamplingEnv = {
 export class PerfMetrics {
   private readonly frames: RollingStat
   private readonly flush: RollingStat
-  private readonly latency: RollingStat
+  private readonly dataAge: RollingStat
   private readonly ticksPerFlush: RollingStat
   private flushes = 0
   private setDataFlushes = 0
@@ -52,7 +53,7 @@ export class PerfMetrics {
   constructor(capacity: number) {
     this.frames = new RollingStat(capacity)
     this.flush = new RollingStat(capacity)
-    this.latency = new RollingStat(capacity)
+    this.dataAge = new RollingStat(capacity)
     this.ticksPerFlush = new RollingStat(capacity)
   }
 
@@ -64,7 +65,7 @@ export class PerfMetrics {
     this.flushes++
     if (stats.mode === 'setData') this.setDataFlushes++
     this.flush.add(stats.durationMs)
-    this.latency.add(stats.latencyMs)
+    this.dataAge.add(stats.dataAgeMs)
     this.ticksPerFlush.add(stats.ticks)
   }
 
@@ -81,7 +82,7 @@ export class PerfMetrics {
   clearSamples(): void {
     this.frames.clear()
     this.flush.clear()
-    this.latency.clear()
+    this.dataAge.clear()
     this.ticksPerFlush.clear()
     this.windowLongTaskMaxMs = 0
   }
@@ -95,8 +96,8 @@ export class PerfMetrics {
       flushP50: this.flush.percentile(0.5),
       flushP95: this.flush.percentile(0.95),
       flushMax: this.flush.max(),
-      latencyP50: this.latency.percentile(0.5),
-      latencyP95: this.latency.percentile(0.95),
+      dataAgeP50: this.dataAge.percentile(0.5),
+      dataAgeP95: this.dataAge.percentile(0.95),
       ticksPerFlushP50: this.ticksPerFlush.percentile(0.5),
       windowLongTaskMaxMs: this.windowLongTaskMaxMs,
       totals: {

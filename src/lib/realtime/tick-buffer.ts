@@ -1,6 +1,7 @@
 import type { ChartPoint, Trade } from '@/lib/realtime/protocol'
 
-export type DrainResult = { points: ChartPoint[]; ticks: number; newestTs: number }
+/** `oldestTs`: server ts of the first (oldest) drained tick; 0 when nothing was drained. */
+export type DrainResult = { points: ChartPoint[]; ticks: number; oldestTs: number }
 
 /** Plain array buffer for incoming ticks. Never touches React. */
 export class TickBuffer {
@@ -25,7 +26,7 @@ export class TickBuffer {
       if (last !== undefined && last.time === time) last.value = tick.priceAfter
       else points.push({ time, value: tick.priceAfter })
     }
-    return { points, ticks: ticks.length, newestTs: ticks.at(-1)?.ts ?? 0 }
+    return { points, ticks: ticks.length, oldestTs: ticks.at(0)?.ts ?? 0 }
   }
 
   clear(): void {

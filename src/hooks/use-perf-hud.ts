@@ -7,7 +7,7 @@ import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
 import { ratesPerSecond } from '@/lib/perf/rates'
 
-export type HudField = 'fps' | 'frame' | 'flush' | 'latency' | 'ticks' | 'msgs' | 'trades' | 'items' | 'kb' | 'commits' | 'longTasks' | 'net'
+export type HudField = 'fps' | 'frame' | 'flush' | 'dataAge' | 'ticks' | 'msgs' | 'trades' | 'items' | 'kb' | 'commits' | 'longTasks' | 'net'
 
 export function usePerfHud(write: (field: HudField, text: string) => void): void {
   const runtime = useMarketRuntime()
@@ -33,7 +33,7 @@ export function usePerfHud(write: (field: HudField, text: string) => void): void
       write('fps', String(snap.fps))
       write('frame', `${snap.frameP50.toFixed(1)} / ${snap.frameP95.toFixed(1)} ms`)
       write('flush', `${snap.flushP50.toFixed(2)} / ${snap.flushP95.toFixed(2)} / ${snap.flushMax.toFixed(2)} ms`)
-      write('latency', `${snap.latencyP50.toFixed(0)} / ${snap.latencyP95.toFixed(0)} ms`)
+      write('dataAge', `${snap.dataAgeP50.toFixed(0)} / ${snap.dataAgeP95.toFixed(0)} ms`)
       write('ticks', `${snap.ticksPerFlushP50} / flush · setData ${snap.totals.setDataFlushes}`)
       write('msgs', `${perSecond.messages.toFixed(0)}/s`)
       write('trades', `${perSecond.trades.toFixed(0)}/s`)

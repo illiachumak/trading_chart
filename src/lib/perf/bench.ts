@@ -123,8 +123,9 @@ export type BenchPhaseResult = {
   flushP50Ms: number
   flushP95Ms: number
   flushMaxMs: number
-  latencyP50Ms: number
-  latencyP95Ms: number
+  /** Data age at paint: server now − oldest tick of each chart flush (replaces the v2 newest-tick latencyP50Ms/P95Ms). */
+  dataAgeP50Ms: number
+  dataAgeP95Ms: number
   ticksPerFlushP50: number
   receivedMessagesPerSec: number
   /** All trades the server reported (shipped + aggregated). Below `tradesPerSec` = the pipeline can't keep up. */
@@ -490,8 +491,8 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       flushP50Ms: round2(snap.flushP50),
       flushP95Ms: round2(snap.flushP95),
       flushMaxMs: round2(snap.flushMax),
-      latencyP50Ms: round2(snap.latencyP50),
-      latencyP95Ms: round2(snap.latencyP95),
+      dataAgeP50Ms: round2(snap.dataAgeP50),
+      dataAgeP95Ms: round2(snap.dataAgeP95),
       ticksPerFlushP50: snap.ticksPerFlushP50,
       receivedMessagesPerSec: round2(received.messages),
       receivedTradesPerSec: round2(received.trades),

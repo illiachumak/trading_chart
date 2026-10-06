@@ -53,15 +53,15 @@ function fakeEnv() {
 describe('PerfMetrics', () => {
   it('aggregates flushes, commits and long tasks', () => {
     const metrics = new PerfMetrics(100)
-    metrics.recordFlush({ mode: 'update', durationMs: 0.2, ticks: 5, points: 1, latencyMs: 30 })
-    metrics.recordFlush({ mode: 'setData', durationMs: 0.8, ticks: 40, points: 31, latencyMs: 50 })
+    metrics.recordFlush({ mode: 'update', durationMs: 0.2, ticks: 5, points: 1, dataAgeMs: 30 })
+    metrics.recordFlush({ mode: 'setData', durationMs: 0.8, ticks: 40, points: 31, dataAgeMs: 50 })
     metrics.recordCommit('chart')
     metrics.recordCommit('panel')
     metrics.recordCommit('panel')
     metrics.recordLongTask(70)
     const snap = metrics.snapshot()
     expect(snap.flushMax).toBe(0.8)
-    expect(snap.latencyP95).toBe(50)
+    expect(snap.dataAgeP95).toBe(50)
     expect(snap.totals).toEqual({
       flushes: 2,
       setDataFlushes: 1,
@@ -97,7 +97,7 @@ describe('PerfMetrics', () => {
 
   it('clearSamples resets percentiles but keeps totals', () => {
     const metrics = new PerfMetrics(100)
-    metrics.recordFlush({ mode: 'update', durationMs: 5, ticks: 1, points: 1, latencyMs: 1 })
+    metrics.recordFlush({ mode: 'update', durationMs: 5, ticks: 1, points: 1, dataAgeMs: 1 })
     metrics.clearSamples()
     expect(metrics.snapshot().flushMax).toBe(0)
     expect(metrics.snapshot().totals.flushes).toBe(1)

@@ -77,9 +77,9 @@ describe('TickBuffer', () => {
         { time: 2, value: 0.55 },
       ],
       ticks: 4,
-      newestTs: 2_050,
+      oldestTs: 1_000,
     })
-    expect(buffer.drain()).toEqual({ points: [], ticks: 0, newestTs: 0 })
+    expect(buffer.drain()).toEqual({ points: [], ticks: 0, oldestTs: 0 })
   })
 })
 
@@ -103,7 +103,7 @@ describe('ChartFeeder', () => {
       { kind: 'update', point: { time: 1, value: 0.53 } },
       { kind: 'update', point: { time: 2, value: 0.54 } },
     ])
-    expect(stats).toEqual([{ mode: 'update', durationMs: 0, ticks: 4, points: 2, latencyMs: 10_000 - 2_100 }])
+    expect(stats).toEqual([{ mode: 'update', durationMs: 0, ticks: 4, points: 2, dataAgeMs: 10_000 - 1_100 }])
     expect(feeder.getHistory()).toEqual([
       { time: 0, value: 0.5 },
       { time: 1, value: 0.53 },

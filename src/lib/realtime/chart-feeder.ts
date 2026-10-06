@@ -17,8 +17,11 @@ export type FlushStats = {
   durationMs: number
   ticks: number
   points: number
-  /** Server time of the newest tick → this flush. */
-  latencyMs: number
+  /**
+   * Data age at paint: server time now − ts of the OLDEST tick in this flush, i.e. how stale the
+   * stalest value the user is about to see is (includes network, batching and frame wait).
+   */
+  dataAgeMs: number
 }
 
 export type ChartFeederOptions = {
@@ -89,7 +92,7 @@ export class ChartFeeder {
 
   private flush(): void {
     const startedAt = this.options.perfNow()
-    const { points, ticks, newestTs } = this.buffer.drain()
+    const { points, ticks, oldestTs } = this.buffer.drain()
     const fresh: ChartPoint[] = []
     for (const point of points) {
       const last = this.history.at(-1)
@@ -107,7 +110,7 @@ export class ChartFeeder {
       durationMs: this.options.perfNow() - startedAt,
       ticks,
       points: fresh.length,
-      latencyMs: this.options.serverNow() - newestTs,
+      dataAgeMs: this.options.serverNow() - oldestTs,
     })
   }
 }
