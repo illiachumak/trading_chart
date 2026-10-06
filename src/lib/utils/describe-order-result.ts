@@ -47,14 +47,26 @@ export function describeOrderResult(result: OrderResult): OrderMessage {
   }
 }
 
+/** Tolerance for "worstAvgPrice is the price bound" (the server caps it with Math.min, so it is exact). */
+const BOUND_EPSILON = 1e-9
+
 /**
  * Worst-case line for a quote; every number comes from the server quote, this only formats.
  * Rounding never overstates the guarantee: shares are floored, the worst price is ceiled.
+ *
+ * "At least N shares" holds only for a full fill: an order whose fill hits the price bound is filled
+ * partially (status 'partial', rest refunded) and can return fewer shares. A partial fill is possible when
+ * the quote is already clipped or the tolerance reaches the bound (worstAvgPrice capped at PRICE_BOUND), so
+ * those quotes say so instead of promising a share count. Rejecting partial fills server-side would change
+ * the existing order semantics (partial + refund), so the line is worded honestly instead.
  */
 export function describeQuoteProtection(quote: Extract<QuoteResult, { status: 'ok' }> | 'none'): string {
   const pay = quote === 'none' ? PLACEHOLDER : formatUsd(quote.cost)
-  const shares = quote === 'none' ? PLACEHOLDER : formatSharesFloor(quote.minShares)
   const worst = quote === 'none' ? PLACEHOLDER : formatCentsCeil(quote.worstAvgPrice)
+  if (quote !== 'none' && (quote.clipped || quote.worstAvgPrice >= PRICE_BOUND - BOUND_EPSILON)) {
+    return `You pay ${pay} · near price limit — may partially fill · worst avg ${worst}`
+  }
+  const shares = quote === 'none' ? PLACEHOLDER : formatSharesFloor(quote.minShares)
   return `You pay ${pay} · at least ${shares} shares · worst avg ${worst}`
 }
 

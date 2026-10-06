@@ -36,9 +36,14 @@ describe('describeQuoteProtection', () => {
     expect(describeQuoteProtection(OK_QUOTE)).toBe('You pay $10.00 · at least 18.42 shares · worst avg 54.3¢')
   })
 
-  it('shows the fillable cost of a clipped quote', () => {
+  it('drops the share guarantee for a clipped quote, which may fill even less at the bound', () => {
     const clipped: QuoteResult = { ...OK_QUOTE, amountUsd: 5_000, cost: 1_234.5, clipped: true, minShares: 2_000 }
-    expect(describeQuoteProtection(clipped)).toBe('You pay $1,234.50 · at least 2000.00 shares · worst avg 54.3¢')
+    expect(describeQuoteProtection(clipped)).toBe('You pay $1,234.50 · near price limit — may partially fill · worst avg 54.3¢')
+  })
+
+  it('drops the share guarantee when the worst average is capped at the price bound', () => {
+    const atBound: QuoteResult = { ...OK_QUOTE, avgPrice: 0.83, worstAvgPrice: 0.85, minShares: 10 / 0.85 }
+    expect(describeQuoteProtection(atBound)).toBe('You pay $10.00 · near price limit — may partially fill · worst avg 85.0¢')
   })
 
   it('never overstates the guarantee when rounding', () => {

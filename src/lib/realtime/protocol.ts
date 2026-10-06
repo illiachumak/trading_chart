@@ -76,7 +76,10 @@ export type QuoteResult =
       maxSlippage: number
       /** Worst average price the order can fill at: avgPrice + maxSlippage, capped at the price bound. */
       worstAvgPrice: number
-      /** Fewest shares a fill can return: cost / worstAvgPrice (cost = amountUsd unless clipped). */
+      /**
+       * Fewest shares a full fill can return: cost / worstAvgPrice (cost = amountUsd unless clipped). A fill that
+       * hits the price bound is partial and can return fewer (see describeQuoteProtection).
+       */
       minShares: number
     }
   | { status: 'unavailable'; requestId: number; side: Side; amountUsd: number; maxSlippage: number }

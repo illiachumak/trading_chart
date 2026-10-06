@@ -133,7 +133,8 @@ export class MarketEngine {
         clipped: fill.clipped,
         maxSlippage,
         worstAvgPrice,
-        // A fill at or below the worst average buys at least this many shares for what it spends.
+        // A full fill at or below the worst average buys at least this many shares; a fill clipped at the bound
+        // (partial, refunded) can buy fewer, and the ticket says so for clipped / at-bound quotes.
         minShares: fill.cost / worstAvgPrice,
       },
     }
