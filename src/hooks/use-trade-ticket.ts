@@ -30,10 +30,10 @@ export function useTradeTicket(): TradeTicket {
   const [slippage, setSlippageState] = useState<number>(DEFAULT_MAX_SLIPPAGE)
   const amount = parseAmount(amountInput)
   const runtime = useMarketRuntime()
-  useQuoteRequests(side, amount)
   const round = useMarket(selectRound)
   const status = useMarket(selectStatus)
   const { order, place, dismiss } = usePlaceOrder()
+  useQuoteRequests(side, amount, order.kind === 'pending')
 
   // Editing the ticket makes the previous order's message stale.
   const setSide = (next: Side): void => {
