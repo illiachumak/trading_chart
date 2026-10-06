@@ -24,6 +24,7 @@ const KEY_METRICS = [
   'fillRate',
   'recoveryP50',
   'recoveryMax',
+  'heapGrowthMb',
 ] as const
 const HIGHER_IS_BETTER: ReadonlySet<string> = new Set(['fillRate'])
 
