@@ -24,6 +24,9 @@ import { formatClock, formatPercent } from '@/lib/utils/format'
 import { SIDE_LABEL } from '@/lib/utils/side-label'
 
 // Lightweight Charts brands unix seconds as UTCTimestamp; this is the one sanctioned cast.
+// Bars of whitespace kept right of the live point.
+const RIGHT_OFFSET = 4
+
 function toUtc(seconds: number): UTCTimestamp {
   return seconds as UTCTimestamp
 }
@@ -68,7 +71,7 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
         borderVisible: false,
         timeVisible: true,
         secondsVisible: true,
-        rightOffset: 4,
+        rightOffset: RIGHT_OFFSET,
         barSpacing: 10,
         fixLeftEdge: true,
         tickMarkFormatter: formatTime,
@@ -93,10 +96,26 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
     })
     const markers = createSeriesMarkers(series, [])
 
+    // fixLeftEdge clamps the right offset up while the round has fewer bars than fit on screen
+    // (1 bar after round_started → ~65 bars of whitespace). shiftVisibleRangeOnNewBar then keeps
+    // that inflated offset, so the view outruns the data and only the last ~2 bars stay visible.
+    // Re-pin the live edge after every write: fixLeftEdge clamps it again, so the line grows from
+    // the left edge until it fills the width, then scrolls. A user scrolled into the past is left alone.
+    const timeScale = chart.timeScale()
+    const followLiveEdge = (): void => {
+      if (timeScale.scrollPosition() >= RIGHT_OFFSET) timeScale.scrollToPosition(RIGHT_OFFSET, false)
+    }
+
     const feeder = new ChartFeeder(
       {
-        update: (point) => series.update(toSeriesPoint(point)),
-        setData: (points) => series.setData(points.map(toSeriesPoint)),
+        update: (point) => {
+          series.update(toSeriesPoint(point))
+          followLiveEdge()
+        },
+        setData: (points) => {
+          series.setData(points.map(toSeriesPoint))
+          followLiveEdge()
+        },
       },
       {
         scheduler: {
