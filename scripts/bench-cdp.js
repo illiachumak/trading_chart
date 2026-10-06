@@ -14,6 +14,7 @@
 //
 // Clicks (real input through page.click, so Event Timing sees them; a failed click is counted and ignored):
 //   every TOGGLE_EVERY_MS  one side toggle + one amount preset (cycling)
+//   soak (`bench=soak` in BENCH_URL): no clicks at all.
 //   every BUY_EVERY_MS     Buy, only when the ticket has an ok quote (button enabled) and never in slippage phases
 //                          (names starting with 'slip '): an order there would perturb the probe's fills.
 //
@@ -28,7 +29,7 @@
 // once with 4 — if calibrationMs is not roughly 4x larger, the throttle is not in effect.
 //
 // Returns ONE JSON string:
-//   { meta, runs: [{ calibrationMs, clicks, seedNotApplied, phases: { <phase>: {...} }, raw? }],
+//   { meta (incl. failedRuns), runs: [{ error } for a failed run | { calibrationMs, clicks, seedNotApplied, phases: { <phase>: {...} }, raw? }],
 //     summary: { <phase>: { <metric>: { mean, ci95, n } } } }
 // runs[].phases[phase] holds the key metrics only (number or 'n/a'):
 //   frameP95, pctFramesOverBudget, loafPerMin, inpP75 (+ interactions), dataAgeP95, commitsPerSec,
@@ -51,6 +52,8 @@ async (page) => {
   const TOGGLE_EVERY_MS = 700
   const BUY_EVERY_MS = 3_000
   const CLICK_TIMEOUT_MS = 1_000
+  const CLICKER_POLL_MS = 250
+  const IS_SOAK = BENCH_URL.includes('bench=soak') // soak: no clicks at all, order state would distort heap growth
   const RESULT_TIMEOUT_MS = 45 * 60 * 1000
 
   const SIDES = ['[data-testid=ticket-side-no]', '[data-testid=ticket-side-yes]']
@@ -194,14 +197,14 @@ async (page) => {
       let lastToggle = 0
       let lastBuy = Date.now()
       while (!finished) {
-        await sleep(100)
+        await sleep(CLICKER_POLL_MS)
         let phase = ''
         try {
           phase = await readPhase()
         } catch {
           continue
         }
-        if (!isMeasured(phase)) continue
+        if (IS_SOAK || !isMeasured(phase)) continue
         const now = Date.now()
         if (now - lastToggle >= TOGGLE_EVERY_MS) {
           lastToggle = now
@@ -211,6 +214,14 @@ async (page) => {
         }
         if (!phase.startsWith('slip ') && Date.now() - lastBuy >= BUY_EVERY_MS) {
           lastBuy = Date.now()
+          // Re-read right before buying: the phase may have changed during the toggle clicks above.
+          let current = ''
+          try {
+            current = await readPhase()
+          } catch {
+            continue
+          }
+          if (current !== phase || !isMeasured(current) || current.startsWith('slip ')) continue
           const enabled = await page.isEnabled(SUBMIT, { timeout: CLICK_TIMEOUT_MS }).catch(() => false)
           if (enabled && (await click(SUBMIT))) clicks.buys++
         }
@@ -244,14 +255,19 @@ async (page) => {
   const runs = []
   let environment = 'n/a'
   for (let i = 0; i < RUNS; i++) {
-    const { run, environment: env } = await runOnce()
-    runs.push(run)
-    if (environment === 'n/a') environment = env
+    try {
+      const { run, environment: env } = await runOnce()
+      runs.push(run)
+      if (environment === 'n/a') environment = env
+    } catch (e) {
+      runs.push({ error: String(e) })
+    }
   }
+  const okRuns = runs.filter((r) => !r.error)
 
   // Summary: mean ± 95% CI per phase and numeric key metric, across runs.
   const summary = {}
-  for (const run of runs) {
+  for (const run of okRuns) {
     for (const [phase, metrics] of Object.entries(run.phases)) {
       const byMetric = (summary[phase] ??= {})
       for (const [metric, value] of Object.entries(metrics)) {
@@ -268,11 +284,12 @@ async (page) => {
     benchUrl: BENCH_URL,
     runs: RUNS,
     cpuThrottle: CPU_THROTTLE,
+    failedRuns: runs.length - okRuns.length,
     startedAt,
     userAgent: await page.evaluate(() => navigator.userAgent),
     buildHash: environment === 'n/a' ? 'n/a' : environment.buildHash,
     displayHz: environment === 'n/a' ? 'n/a' : environment.displayHz,
-    seedNotApplied: [...new Set(runs.flatMap((r) => r.seedNotApplied))],
+    seedNotApplied: [...new Set(okRuns.flatMap((r) => r.seedNotApplied ?? []))],
   }
   return JSON.stringify({ meta, runs, summary })
 }
