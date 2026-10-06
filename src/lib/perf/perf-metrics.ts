@@ -5,6 +5,8 @@ import { PERF_SAMPLE_CAPACITY } from '@/config/market'
 import { RollingStat } from '@/lib/perf/rolling-stat'
 import type { FlushStats } from '@/lib/realtime/chart-feeder'
 
+const MAX_FRAME_GAP_MS = 1_000
+
 export type PerfTotals = {
   flushes: number
   setDataFlushes: number
@@ -118,7 +120,8 @@ export class PerfMetrics {
     let lastFrame: number | 'none' = 'none'
     let cancelFrame: () => void = () => {}
     const loop = (time: number): void => {
-      if (lastFrame !== 'none') this.recordFrame(time - lastFrame)
+      // Gaps this long mean the tab was hidden or throttled, not a slow frame.
+      if (lastFrame !== 'none' && time - lastFrame <= MAX_FRAME_GAP_MS) this.recordFrame(time - lastFrame)
       lastFrame = time
       cancelFrame = env.requestFrame(loop)
     }

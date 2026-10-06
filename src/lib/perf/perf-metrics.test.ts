@@ -87,6 +87,14 @@ describe('PerfMetrics', () => {
     expect(fake.observers()).toBe(0)
   })
 
+  it('ignores frame gaps over 1s (hidden tab)', () => {
+    const metrics = new PerfMetrics(100)
+    const fake = fakeEnv()
+    metrics.acquireSampling(fake.env)
+    for (const t of [0, 20, 40, 60_000, 60_020]) fake.runFrame(t)
+    expect(metrics.snapshot().frameP95).toBe(20)
+  })
+
   it('clearSamples resets percentiles but keeps totals', () => {
     const metrics = new PerfMetrics(100)
     metrics.recordFlush({ mode: 'update', durationMs: 5, ticks: 1, points: 1, latencyMs: 1 })
