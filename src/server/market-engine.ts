@@ -28,6 +28,7 @@ export type EngineConfig = {
   roundMs: number
   recentTradesLimit: number
   roundHistoryLimit: number
+  orderResultCacheLimit: number
 }
 
 export type EngineDeps = { rng: Rng; resolver: Resolver; traders: MockTraderModel }
@@ -210,6 +211,11 @@ export class MarketEngine {
     if (existing !== undefined) return { result: existing, trade: 'none' }
     const execution = this.fillOrder(ts, request)
     this.orderResults.set(request.clientOrderId, execution.result)
+    // Map iterates in insertion order, so the first key is the oldest.
+    if (this.orderResults.size > this.config.orderResultCacheLimit) {
+      const [oldest] = this.orderResults.keys()
+      this.orderResults.delete(oldest)
+    }
     return execution
   }
 

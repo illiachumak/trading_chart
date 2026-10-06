@@ -3,9 +3,11 @@
 
 import {
   DEFAULT_TRADES_PER_SEC,
+  HEARTBEAT_INTERVAL_MS,
   LMSR_LIQUIDITY,
   MAX_DROP_RATE,
   MAX_LATENCY_MS,
+  ORDER_RESULT_CACHE_SIZE,
   PRICE_BOUND,
   RECENT_TRADES_LIMIT,
   REPLAY_BUFFER_SIZE,
@@ -14,12 +16,19 @@ import {
   START_BALANCE,
 } from '@/config/market'
 import type { MainToWorker, WorkerToMain } from '@/lib/realtime/bridge'
-import { type ClientMessage, type DevCommand, parseClientMessage, type ServerMessage, type SnapshotPayload } from '@/lib/realtime/protocol'
+import {
+  type ClientMessage,
+  type DevCommand,
+  parseClientMessage,
+  type ServerMessage,
+  type ServerPayload,
+  type SnapshotPayload,
+} from '@/lib/realtime/protocol'
 import { type EngineConfig, MarketEngine } from '@/server/market-engine'
 import { ArrivalGenerator, MEAN_REVERTING_TRADERS } from '@/server/mock-traders'
 import { Outbox } from '@/server/outbox'
 import { createCoinflipResolver } from '@/server/resolvers/coinflip-resolver'
-import type { Rng } from '@/server/rng'
+import { createRng, type Rng } from '@/server/rng'
 
 export type MockServerDeps = {
   post: (message: WorkerToMain) => void
@@ -37,6 +46,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = {
   roundMs: ROUND_MS,
   recentTradesLimit: RECENT_TRADES_LIMIT,
   roundHistoryLimit: ROUND_HISTORY_LIMIT,
+  orderResultCacheLimit: ORDER_RESULT_CACHE_SIZE,
   tradesPerSec: DEFAULT_TRADES_PER_SEC,
   replayCapacity: REPLAY_BUFFER_SIZE,
 }
@@ -45,18 +55,25 @@ function clamp(value: number, min: number, max: number): number {
   return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min
 }
 
+type PendingDelivery = { data: string; dueAt: number }
+
 export class MockServer {
   private readonly deps: MockServerDeps
   private readonly engine: MarketEngine
   private readonly outbox: Outbox
   private readonly arrivals: ArrivalGenerator
   private readonly connections = new Set<number>()
+  /** Separate stream so that fault settings never change trades or round outcomes. */
+  private readonly faultRng: Rng
   private latencyMs = 0
   private dropRate = 0
-  private readonly lastDeliverAt = new Map<number, number>()
+  private lastPublishAt: number
+  /** Per-connection FIFO of delayed messages; drained by a single timer per connection. */
+  private readonly pending = new Map<number, PendingDelivery[]>()
 
   constructor(deps: MockServerDeps, config: ServerConfig) {
     this.deps = deps
+    this.faultRng = createRng(Math.floor(deps.rng() * 4_294_967_296))
     const now = deps.now()
     this.engine = new MarketEngine(
       config,
@@ -67,6 +84,7 @@ export class MockServer {
     this.arrivals = new ArrivalGenerator(deps.rng, now, config.tradesPerSec)
     // Publish the initial round so every snapshot has seq >= 1 (no connections yet, nothing to broadcast).
     this.outbox.publish({ type: 'round_started', ts: now, round: this.engine.getRound(), price: this.engine.getPrice() })
+    this.lastPublishAt = now
   }
 
   getLastSeq(): number {
@@ -86,7 +104,7 @@ export class MockServer {
         return
       case 'close':
         this.connections.delete(message.connId)
-        this.lastDeliverAt.delete(message.connId)
+        this.pending.delete(message.connId)
         return
       case 'data': {
         if (!this.connections.has(message.connId)) return
@@ -101,11 +119,19 @@ export class MockServer {
   tick(): void {
     const now = this.deps.now()
     for (const arrival of this.arrivals.generate(now)) this.engine.enqueueMock(arrival.ts, arrival.shares)
-    for (const payload of this.engine.advance(now)) this.broadcast(this.outbox.publish(payload))
+    for (const payload of this.engine.advance(now)) this.broadcast(this.publish(payload))
   }
 
+  /** Sent only when nothing else went out during the last heartbeat interval. */
   heartbeat(): void {
-    this.broadcast(this.outbox.publish({ type: 'heartbeat', ts: this.deps.now() }))
+    const now = this.deps.now()
+    if (now - this.lastPublishAt < HEARTBEAT_INTERVAL_MS) return
+    this.broadcast(this.publish({ type: 'heartbeat', ts: now }))
+  }
+
+  private publish(payload: ServerPayload): ServerMessage {
+    this.lastPublishAt = this.deps.now()
+    return this.outbox.publish(payload)
   }
 
   private handleClient(connId: number, message: ClientMessage): void {
@@ -121,7 +147,7 @@ export class MockServer {
         return
       }
       case 'quote':
-        this.broadcast(this.outbox.publish(this.engine.quote(now, message)))
+        this.broadcast(this.publish(this.engine.quote(now, message)))
         return
       case 'place_order':
         // Stamped with the server receive time; executed in ts order on the next tick.
@@ -147,7 +173,7 @@ export class MockServer {
       case 'force_disconnect':
         for (const connId of this.connections) this.deps.post({ kind: 'closed', connId })
         this.connections.clear()
-        this.lastDeliverAt.clear()
+        this.pending.clear()
         return
     }
   }
@@ -157,20 +183,41 @@ export class MockServer {
   }
 
   private send(connId: number, message: ServerMessage): void {
-    if (this.dropRate > 0 && this.deps.rng() < this.dropRate) return
+    if (this.dropRate > 0 && this.faultRng() < this.dropRate) return
     const data = JSON.stringify(message)
-    const deliver = (): void => {
-      if (this.connections.has(connId)) this.deps.post({ kind: 'data', connId, data })
+    const queue = this.pending.get(connId)
+    // Never overtake a message that is still waiting, even if latency was lowered meanwhile.
+    if (this.latencyMs === 0 && queue === undefined) {
+      this.deps.post({ kind: 'data', connId, data })
+      return
     }
-    // Per-connection FIFO: never deliver earlier than a message that is still pending.
+    const delivery: PendingDelivery = { data, dueAt: this.deps.now() + this.latencyMs }
+    if (queue !== undefined) {
+      queue.push(delivery)
+      return
+    }
+    const fresh = [delivery]
+    this.pending.set(connId, fresh)
+    this.scheduleDrain(connId, fresh)
+  }
+
+  private scheduleDrain(connId: number, queue: PendingDelivery[]): void {
+    const delay = Math.max(1, queue[0].dueAt - this.deps.now())
+    this.deps.schedule(() => this.drain(connId, queue), delay)
+  }
+
+  private drain(connId: number, queue: PendingDelivery[]): void {
+    // The queue was dropped by close/force_disconnect (a reconnect gets a fresh one).
+    if (this.pending.get(connId) !== queue) return
     const now = this.deps.now()
-    const pendingMs = (this.lastDeliverAt.get(connId) ?? 0) - now
-    if (this.latencyMs > 0 || pendingMs > 0) {
-      const delay = Math.max(this.latencyMs, pendingMs, 0)
-      this.lastDeliverAt.set(connId, now + delay)
-      this.deps.schedule(deliver, delay)
-    } else {
-      deliver()
+    while (queue.length > 0 && queue[0].dueAt <= now) {
+      const next = queue.shift()
+      if (next !== undefined) this.deps.post({ kind: 'data', connId, data: next.data })
     }
+    if (queue.length === 0) {
+      this.pending.delete(connId)
+      return
+    }
+    this.scheduleDrain(connId, queue)
   }
 }

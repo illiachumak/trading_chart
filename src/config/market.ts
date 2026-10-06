@@ -17,6 +17,8 @@ export const MAX_TRADES_PER_SEC = 1_000
 export const REPLAY_BUFFER_SIZE = 5_000
 export const RECENT_TRADES_LIMIT = 20
 export const ROUND_HISTORY_LIMIT = 20
+/** Idempotency window: how many recent `clientOrderId` results the server remembers. */
+export const ORDER_RESULT_CACHE_SIZE = 1_000
 
 export const MAX_LATENCY_MS = 5_000
 export const MAX_DROP_RATE = 0.9

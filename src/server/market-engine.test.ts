@@ -12,17 +12,15 @@ const CONFIG: EngineConfig = {
   roundMs: 60_000,
   recentTradesLimit: 20,
   roundHistoryLimit: 20,
+  orderResultCacheLimit: 100,
 }
 
 const ALWAYS_YES: MockTraderModel = { pickSide: () => 'yes' }
 const YES_WINS: Resolver = { onRoundStart() {}, resolve: () => 'yes' }
+const NO_WINS: Resolver = { onRoundStart() {}, resolve: () => 'no' }
 
-function makeEngine(overrides: Partial<EngineConfig> = {}): MarketEngine {
-  return new MarketEngine(
-    { ...CONFIG, ...overrides },
-    { rng: createRng(1), resolver: YES_WINS, traders: ALWAYS_YES },
-    0,
-  )
+function makeEngine(overrides: Partial<EngineConfig> = {}, resolver: Resolver = YES_WINS): MarketEngine {
+  return new MarketEngine({ ...CONFIG, ...overrides }, { rng: createRng(1), resolver, traders: ALWAYS_YES }, 0)
 }
 
 function order(overrides: Partial<PlaceOrder> = {}): PlaceOrder {
@@ -207,6 +205,43 @@ describe('MarketEngine', () => {
     expect(started.price).toBe(0.5)
     expect(engine.snapshot(60_000).history).toEqual([{ time: 60, value: 0.5 }])
     expect(engine.snapshot(60_000).userTrades).toEqual([])
+  })
+
+  it('pays the NO side when NO wins and nothing for losing YES shares', () => {
+    const engine = makeEngine({}, NO_WINS)
+    engine.enqueueOrder(1_000, order({ clientOrderId: 'y', side: 'yes', amountUsd: 100 }))
+    engine.enqueueOrder(2_000, order({ clientOrderId: 'n', side: 'no', amountUsd: 50, expectedPrice: 0.6 }))
+    const fills = ofType(engine.advance(2_000), 'order_result').map((p) => p.result)
+    const noFill = fills.find((r) => r.clientOrderId === 'n')
+    if (noFill?.status !== 'filled') throw new Error('expected NO fill')
+    const out = engine.advance(60_000)
+    const [resolved] = ofType(out, 'round_resolved')
+    expect(resolved.outcome).toBe('no')
+    expect(resolved.payout).toBeCloseTo(noFill.shares, 9)
+    const [{ account }] = ofType(out, 'account')
+    expect(account.balance).toBeCloseTo(850 + noFill.shares, 9)
+    expect(account.history[0].pnl).toBeCloseTo(noFill.shares - 150, 9)
+  })
+
+  it('quotes a clipped fill near the bound', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 5_000 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    expect(quote.clipped).toBe(true)
+    expect(quote.cost).toBeLessThan(5_000)
+    expect(engine.quote(0, { type: 'quote', requestId: 2, side: 'yes', amountUsd: 50 }).quote).toMatchObject({
+      clipped: false,
+    })
+  })
+
+  it('forgets the oldest clientOrderId once the idempotency cache is full', () => {
+    const engine = makeEngine({ orderResultCacheLimit: 2, startBalance: 10_000 })
+    for (const id of ['a', 'b', 'c']) engine.enqueueOrder(10, order({ clientOrderId: id, amountUsd: 1 }))
+    engine.advance(10)
+    engine.enqueueOrder(20, order({ clientOrderId: 'c', amountUsd: 1 })) // still cached → no new trade
+    engine.enqueueOrder(20, order({ clientOrderId: 'a', amountUsd: 1 })) // evicted → executes again
+    const [batch] = ofType(engine.advance(20), 'trades')
+    expect(batch.items.map((t) => (t.source === 'user' ? t.clientOrderId : t.source))).toEqual(['a'])
   })
 
   it('rolls over multiple missed rounds', () => {

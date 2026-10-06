@@ -4,19 +4,39 @@ import { type ClientMessage, parseServerMessage, type ServerMessage } from '@/li
 import { DEFAULT_SERVER_CONFIG, MockServer, type ServerConfig } from '@/server/mock-server'
 import { createRng } from '@/server/rng'
 
-function setup(overrides: Partial<ServerConfig> = {}) {
+type Timer = { fn: () => void; due: number; order: number }
+
+/** `timerJitterMs` makes timers fire late, like real `setTimeout` under load. */
+function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
   let now = 0
+  let timerOrder = 0
   const posted: WorkerToMain[] = []
-  const scheduled: { fn: () => void; ms: number; due: number }[] = []
+  const deliveredAt: number[] = []
+  let timers: Timer[] = []
   const server = new MockServer(
     {
-      post: (message) => posted.push(message),
+      post: (message) => {
+        posted.push(message)
+        deliveredAt.push(now)
+      },
       now: () => now,
       rng: createRng(42),
-      schedule: (fn, ms) => scheduled.push({ fn, ms, due: now + ms }),
+      schedule: (fn, ms) => timers.push({ fn, due: now + ms + timerJitterMs, order: timerOrder++ }),
     },
     { ...DEFAULT_SERVER_CONFIG, ...overrides },
   )
+  /** Moves the clock to `until`, firing due timers in (due, creation) order. */
+  const advanceTo = (until: number): void => {
+    for (;;) {
+      const due = timers.filter((t) => t.due <= until).sort((a, b) => a.due - b.due || a.order - b.order)
+      if (due.length === 0) break
+      const [next] = due
+      timers = timers.filter((t) => t !== next)
+      now = Math.max(now, next.due)
+      next.fn()
+    }
+    now = until
+  }
   const messagesFor = (connId: number): ServerMessage[] =>
     posted.flatMap((p) => {
       if (p.kind !== 'data' || p.connId !== connId) return []
@@ -26,11 +46,14 @@ function setup(overrides: Partial<ServerConfig> = {}) {
   return {
     server,
     posted,
-    scheduled,
+    deliveredAt,
     messagesFor,
+    pendingTimers: () => timers.length,
+    advanceTo,
+    now: () => now,
     tickFor(ms: number) {
       for (let t = 0; t < ms; t += 100) {
-        now += 100
+        advanceTo(now + 100)
         server.tick()
       }
     },
@@ -124,10 +147,10 @@ describe('MockServer', () => {
     t.connect(1)
     t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 200 } })
     t.tickFor(300)
-    expect(t.scheduled.length).toBeGreaterThan(0)
+    expect(t.pendingTimers()).toBeGreaterThan(0)
     t.send(1, { type: 'dev', command: { kind: 'force_disconnect' } })
     t.posted.length = 0
-    for (const s of t.scheduled) s.fn()
+    t.advanceTo(10_000)
     expect(t.posted).toEqual([])
   })
 
@@ -136,28 +159,30 @@ describe('MockServer', () => {
     t.connect(1)
     t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 200 } })
     t.posted.length = 0
-    t.tickFor(300)
+    t.deliveredAt.length = 0
+    t.tickFor(100)
+    t.advanceTo(299)
     expect(t.messagesFor(1)).toEqual([])
-    expect(t.scheduled.length).toBeGreaterThan(0)
-    expect(t.scheduled.every((s) => s.ms === 200)).toBe(true)
-    for (const s of t.scheduled) s.fn()
-    expect(t.messagesFor(1).length).toBe(t.scheduled.length)
+    t.tickFor(1_000)
+    const delivered = t.messagesFor(1)
+    expect(delivered.length).toBeGreaterThan(5)
+    // Trades batches are stamped with the publish time, so delivery - ts is the injected latency.
+    delivered.forEach((m, i) => expect(t.deliveredAt[i] - m.ts).toBeGreaterThanOrEqual(200))
   })
 
-  it('keeps per-connection delivery in order when latency is lowered mid-stream', () => {
-    const t = setup()
+  it('keeps per-connection delivery in order when latency is lowered and timers fire late', () => {
+    const t = setup({}, 7)
     t.connect(1)
     t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 300 } })
     t.posted.length = 0
     t.tickFor(500)
     t.send(1, { type: 'dev', command: { kind: 'set_latency', ms: 0 } })
-    t.tickFor(200)
-    expect(t.scheduled.length).toBeGreaterThan(1)
-    const byDue = [...t.scheduled].sort((a, b) => a.due - b.due)
-    for (const s of byDue) s.fn()
+    t.tickFor(1_000)
+    t.advanceTo(10_000)
     const seqs = t.messagesFor(1).map((m) => m.seq)
-    expect(seqs.length).toBeGreaterThan(1)
-    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1])
+    expect(seqs.length).toBeGreaterThan(10)
+    // Nothing lost and nothing reordered: delivered seqs are exactly consecutive.
+    seqs.forEach((seq, i) => expect(seq).toBe(seqs[0] + i))
   })
 
   it('never serves a snapshot with seq 0, even before the first tick', () => {
@@ -179,10 +204,35 @@ describe('MockServer', () => {
     expect(t.posted).toEqual([{ kind: 'open', connId: 1 }])
   })
 
-  it('publishes heartbeats with seq', () => {
+  it('publishes a heartbeat with seq only after a quiet interval', () => {
     const t = setup()
     t.connect(1)
+    t.advanceTo(999)
     t.server.heartbeat()
-    expect(t.messagesFor(1).at(-1)).toMatchObject({ type: 'heartbeat', seq: t.server.getLastSeq() })
+    expect(t.messagesFor(1)).toEqual([])
+    t.advanceTo(1_000)
+    t.server.heartbeat()
+    expect(t.messagesFor(1)).toEqual([{ type: 'heartbeat', ts: 1_000, seq: t.server.getLastSeq() }])
+  })
+
+  it('skips heartbeats while trades are flowing', () => {
+    const t = setup()
+    t.connect(1)
+    for (let i = 0; i < 5; i++) {
+      t.tickFor(1_000)
+      t.server.heartbeat()
+    }
+    expect(t.messagesFor(1).some((m) => m.type === 'heartbeat')).toBe(false)
+  })
+
+  it('does not let fault injection change the market', () => {
+    const run = (dropRate: number): number[] => {
+      const t = setup()
+      t.connect(1)
+      t.send(1, { type: 'dev', command: { kind: 'set_drop_rate', rate: dropRate } })
+      t.tickFor(2_000)
+      return t.server.getSnapshot().recentTrades.map((trade) => trade.priceAfter)
+    }
+    expect(run(0.5)).toEqual(run(0))
   })
 })
