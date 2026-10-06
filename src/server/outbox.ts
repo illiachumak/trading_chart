@@ -23,7 +23,7 @@ export class Outbox {
   }
 
   replayFrom(fromSeq: number): readonly ServerMessage[] | 'snapshot_required' {
-    if (fromSeq <= 1 || fromSeq > this.seq + 1) return 'snapshot_required'
+    if (!Number.isInteger(fromSeq) || fromSeq <= 1 || fromSeq > this.seq + 1) return 'snapshot_required'
     const oldest = this.ring[0]?.seq ?? this.seq + 1
     if (fromSeq < oldest) return 'snapshot_required'
     return this.ring.slice(fromSeq - oldest)

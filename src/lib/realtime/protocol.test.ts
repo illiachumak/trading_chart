@@ -25,6 +25,34 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage(JSON.stringify({ type: 'hack' }))).toBe('invalid')
     expect(parseClientMessage('null')).toBe('invalid')
   })
+
+  it('rejects known types with a malformed body', () => {
+    const order = {
+      type: 'place_order',
+      clientOrderId: 'a',
+      roundId: 1,
+      side: 'yes',
+      amountUsd: 10,
+      expectedPrice: 0.5,
+      maxSlippage: 0.02,
+    }
+    expect(parseClientMessage(JSON.stringify(order))).toEqual(order)
+    expect(parseClientMessage(JSON.stringify({ ...order, clientOrderId: undefined }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ ...order, clientOrderId: '' }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ ...order, side: 'YES' }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ ...order, amountUsd: Number.NaN }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'quote', requestId: 1, side: 'maybe', amountUsd: 5 }))).toBe(
+      'invalid',
+    )
+    expect(parseClientMessage(JSON.stringify({ type: 'resync' }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'resync', fromSeq: 1.5 }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev' }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_latency' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'force_disconnect' } }))).toEqual({
+      type: 'dev',
+      command: { kind: 'force_disconnect' },
+    })
+  })
 })
 
 describe('bridge guards', () => {

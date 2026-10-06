@@ -130,9 +130,7 @@ const SERVER_TYPES: ReadonlySet<string> = new Set([
   'heartbeat',
 ])
 
-const CLIENT_TYPES: ReadonlySet<string> = new Set(['place_order', 'quote', 'resync', 'dev'])
-
-// Shallow guards: the payload comes from our own backend, we only verify the envelope.
+// Shallow guard: the payload comes from our own backend, we only verify the envelope.
 export function isServerMessage(value: unknown): value is ServerMessage {
   return (
     isRecord(value) &&
@@ -143,8 +141,54 @@ export function isServerMessage(value: unknown): value is ServerMessage {
   )
 }
 
+function isSide(value: unknown): value is Side {
+  return value === 'yes' || value === 'no'
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number'
+}
+
+function isDevCommand(value: unknown): value is DevCommand {
+  if (!isRecord(value)) return false
+  switch (value.kind) {
+    case 'set_rate':
+      return isNumber(value.tradesPerSec)
+    case 'set_latency':
+      return isNumber(value.ms)
+    case 'set_drop_rate':
+      return isNumber(value.rate)
+    case 'force_disconnect':
+      return true
+    default:
+      return false
+  }
+}
+
+// Deep guard: the server must not trust client input. Range checks (amount > 0 etc.)
+// stay in the engine so that an out-of-range order still gets an `invalid` rejection.
 export function isClientMessage(value: unknown): value is ClientMessage {
-  return isRecord(value) && typeof value.type === 'string' && CLIENT_TYPES.has(value.type)
+  if (!isRecord(value)) return false
+  switch (value.type) {
+    case 'place_order':
+      return (
+        typeof value.clientOrderId === 'string' &&
+        value.clientOrderId.length > 0 &&
+        isNumber(value.roundId) &&
+        isSide(value.side) &&
+        isNumber(value.amountUsd) &&
+        isNumber(value.expectedPrice) &&
+        isNumber(value.maxSlippage)
+      )
+    case 'quote':
+      return isNumber(value.requestId) && isSide(value.side) && isNumber(value.amountUsd)
+    case 'resync':
+      return Number.isInteger(value.fromSeq)
+    case 'dev':
+      return isDevCommand(value.command)
+    default:
+      return false
+  }
 }
 
 function parseJson(raw: string): unknown {

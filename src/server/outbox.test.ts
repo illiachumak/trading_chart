@@ -29,6 +29,7 @@ describe('Outbox', () => {
     expect(outbox.replayFrom(0)).toBe('snapshot_required')
     expect(outbox.replayFrom(3)).toBe('snapshot_required')
     expect(outbox.replayFrom(9)).toBe('snapshot_required')
+    expect(outbox.replayFrom(Number.NaN)).toBe('snapshot_required')
     const replay = outbox.replayFrom(4)
     if (replay === 'snapshot_required') throw new Error('expected replay')
     expect(replay.map((m) => m.seq)).toEqual([4, 5, 6])
