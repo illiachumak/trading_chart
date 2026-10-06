@@ -331,6 +331,38 @@ describe('AccountStore', () => {
     return { account, client }
   }
 
+  it('keeps the history array and position object when an account update did not change them', () => {
+    const { account, client } = attached()
+    const row = { roundId: 1, outcome: 'yes', spent: 5, payout: 8, pnl: 3 } as const
+    client.emit({ type: 'account', seq: 1, ts: 0, account: { ...ACCOUNT, history: [row] } })
+    const first = account.store.getState().account
+    if (first === 'loading') throw new Error('expected account')
+    client.emit({
+      type: 'account',
+      seq: 2,
+      ts: 0,
+      account: { ...ACCOUNT, balance: 990, history: [{ ...row }], position: { ...ACCOUNT.position } },
+    })
+    const same = account.store.getState().account
+    if (same === 'loading') throw new Error('expected account')
+    expect(same.balance).toBe(990)
+    expect(same.history).toBe(first.history)
+    expect(same.position).toBe(first.position)
+
+    client.emit({
+      type: 'account',
+      seq: 3,
+      ts: 0,
+      account: { ...ACCOUNT, history: [{ ...row, roundId: 2, pnl: -5 }, row], position: { ...ACCOUNT.position, spent: 5 } },
+    })
+    const changed = account.store.getState().account
+    if (changed === 'loading') throw new Error('expected account')
+    expect(changed.history).not.toBe(first.history)
+    expect(changed.history).toHaveLength(2)
+    expect(changed.position).not.toBe(first.position)
+    expect(selectRoundHistory(account.store.getState())).toBe(changed.history)
+  })
+
   it('tracks the account and resolves only the pending order', () => {
     const { account, client } = attached()
     client.emit(snapshot(1))

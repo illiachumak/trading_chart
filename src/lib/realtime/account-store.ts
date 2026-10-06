@@ -1,5 +1,5 @@
 import type { MarketClient } from '@/lib/realtime/market-client'
-import type { Account, OrderResult, PlaceOrder, QuoteResult, RoundResult, ServerMessage, Side } from '@/lib/realtime/protocol'
+import type { Account, OrderResult, PlaceOrder, Position, QuoteResult, RoundResult, ServerMessage, Side } from '@/lib/realtime/protocol'
 import { createExternalStore, type ExternalStore } from '@/lib/utils/external-store'
 
 export type OrderStatus =
@@ -26,6 +26,28 @@ export const selectOrder = (s: AccountStoreState): OrderStatus => s.order
 export const selectRoundHistory = (s: AccountStoreState): readonly RoundResult[] =>
   s.account === 'loading' ? EMPTY_HISTORY : s.account.history
 export const selectQuote = (s: AccountStoreState): QuoteResult | 'none' => s.quote
+
+function samePosition(a: Position, b: Position): boolean {
+  return (
+    a.yesShares === b.yesShares &&
+    a.noShares === b.noShares &&
+    a.spent === b.spent &&
+    a.payoutIfYes === b.payoutIfYes &&
+    a.payoutIfNo === b.payoutIfNo
+  )
+}
+
+function sameHistory(a: readonly RoundResult[], b: readonly RoundResult[]): boolean {
+  return a.length === b.length && a.every((row, i) => row.roundId === b[i].roundId && row.pnl === b[i].pnl)
+}
+
+/** Reuses the previous history array / position object when unchanged, so selectors stay referentially stable. */
+function shareStructure(previous: Account | 'loading', next: Account): Account {
+  if (previous === 'loading') return next
+  const history = sameHistory(previous.history, next.history) ? previous.history : next.history
+  const position = samePosition(previous.position, next.position) ? previous.position : next.position
+  return history === next.history && position === next.position ? next : { ...next, history, position }
+}
 
 /**
  * Discrete, low-frequency events only — published immediately.
@@ -92,7 +114,7 @@ export class AccountStore {
     switch (message.type) {
       case 'snapshot':
       case 'account':
-        this.writable.setState({ ...state, account: message.account })
+        this.writable.setState({ ...state, account: shareStructure(state.account, message.account) })
         return
       case 'order_result': {
         const order = state.order
