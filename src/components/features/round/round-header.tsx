@@ -1,6 +1,8 @@
+import { useCallback } from 'react'
 import { useCountdown } from '@/hooks/use-countdown'
 import { useMarket } from '@/hooks/use-market'
-import { selectClockOffset, selectLastResolution, selectPrice, selectRound } from '@/lib/realtime/market-store'
+import { useMarketRuntime } from '@/hooks/use-market-runtime'
+import { selectLastResolution, selectPrice, selectRound } from '@/lib/realtime/market-store'
 import { formatCountdown, formatPercent } from '@/lib/utils/format'
 import { SIDE_LABEL } from '@/lib/utils/side-label'
 
@@ -34,8 +36,9 @@ function Probability() {
 }
 
 function Countdown({ endTs }: { endTs: number }) {
-  const offsetMs = useMarket(selectClockOffset)
-  const seconds = useCountdown(endTs, offsetMs)
+  const runtime = useMarketRuntime()
+  const now = useCallback(() => runtime.serverNow(), [runtime])
+  const seconds = useCountdown(endTs, now)
   return (
     <p className="text-2xl font-semibold tabular-nums">
       {formatCountdown(seconds)}

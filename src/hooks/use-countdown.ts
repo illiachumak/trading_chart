@@ -1,18 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 const TICK_MS = 250
 
-function secondsLeft(endTs: number, offsetMs: number): number {
-  return Math.max(0, Math.ceil((endTs - (Date.now() + offsetMs)) / 1_000))
+function subscribeTicker(onTick: () => void): () => void {
+  const timer = setInterval(onTick, TICK_MS)
+  return () => clearInterval(timer)
 }
 
-/** Seconds until `endTs` on the server clock. Re-renders only when the whole second changes. */
-export function useCountdown(endTs: number, offsetMs: number): number {
-  const [seconds, setSeconds] = useState(() => secondsLeft(endTs, offsetMs))
-  useEffect(() => {
-    setSeconds(secondsLeft(endTs, offsetMs))
-    const timer = setInterval(() => setSeconds(secondsLeft(endTs, offsetMs)), TICK_MS)
-    return () => clearInterval(timer)
-  }, [endTs, offsetMs])
-  return seconds
+/** Seconds until `endTs` on the clock given by `now`. Re-renders only when the whole second changes. */
+export function useCountdown(endTs: number, now: () => number): number {
+  const getSnapshot = useCallback(() => Math.max(0, Math.ceil((endTs - now()) / 1_000)), [endTs, now])
+  return useSyncExternalStore(subscribeTicker, getSnapshot)
 }

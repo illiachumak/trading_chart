@@ -63,7 +63,7 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
         attributionLogo: false,
       },
       grid: { vertLines: { visible: false }, horzLines: { color: CHART_COLORS.grid } },
-      rightPriceScale: { borderVisible: false },
+      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.05, bottom: 0.05 } },
       timeScale: {
         borderVisible: false,
         timeVisible: true,
