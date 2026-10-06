@@ -457,7 +457,7 @@ function serverTickWindow(
 /** What the settings/wait-for-live helpers need; the soak runner shares them. */
 export type SettingsDeps = { target: Pick<BenchTarget, 'sendDev' | 'status'>; sleep(ms: number): Promise<void> }
 
-export async function waitForLive(deps: SettingsDeps): Promise<boolean> {
+async function waitForLive(deps: SettingsDeps): Promise<boolean> {
   for (let waited = 0; waited < LIVE_TIMEOUT_MS; waited += LIVE_POLL_MS) {
     if (deps.target.status() === 'live') return true
     await deps.sleep(LIVE_POLL_MS)
