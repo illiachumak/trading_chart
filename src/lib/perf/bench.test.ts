@@ -9,6 +9,7 @@ import {
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
   SCALE_SCENARIO,
+  readCpuThrottleLabel,
   readHeapMb,
   runBench,
 } from '@/lib/perf/bench'
@@ -19,6 +20,15 @@ import type { AggregationMode, DevCommand, OrderResult, Side } from '@/lib/realt
 const QUOTE_PRICE = 0.5
 const BYTES_PER_ITEM = 128
 const REPLY_MS = 50
+const RECONNECT_MS = 300
+const RESYNC_MS = 150
+const ENVIRONMENT = {
+  userAgent: 'test-agent',
+  devicePixelRatio: 2,
+  hardwareConcurrency: 8,
+  buildHash: 'abc1234',
+  cpuThrottleLabel: '4x',
+} as const
 
 type OrderScript = (index: number, side: Side) => OrderResult | 'timeout'
 
@@ -58,6 +68,11 @@ function fakeBench(
   let aggregation: AggregationMode = 'compact'
   let integratedAt = Date.now()
   let status: ConnectionStatus = 'live'
+  const statusListeners = new Set<(next: ConnectionStatus) => void>()
+  const setStatus = (next: ConnectionStatus): void => {
+    status = next
+    for (const listener of statusListeners) listener(next)
+  }
   // Fake worker: one tick per batch interval, each taking 2 ms; the longest tick between reports is 5 ms.
   let serverTicks = 0
 
@@ -85,13 +100,25 @@ function fakeBench(
       if (command.kind === 'set_rate') rate = command.tradesPerSec
       if (command.kind === 'set_batch_interval') batchMs = command.ms
       if (command.kind === 'set_aggregation') aggregation = command.mode
-      if (command.kind === 'force_disconnect') stats.reconnects++
+      if (command.kind === 'force_disconnect') {
+        // The socket drops, reconnects after 300 ms and is caught up (live) 150 ms later.
+        stats.reconnects++
+        setStatus('reconnecting')
+        setTimeout(() => setStatus('resyncing'), RECONNECT_MS)
+        setTimeout(() => setStatus('live'), RECONNECT_MS + RESYNC_MS)
+      }
     },
     stats: () => {
       integrate()
       return stats
     },
     status: () => status,
+    onStatus: (listener) => {
+      statusListeners.add(listener)
+      return () => {
+        statusListeners.delete(listener)
+      }
+    },
     serverStats: () =>
       new Promise((resolve) =>
         setTimeout(() => {
@@ -136,6 +163,7 @@ function fakeBench(
 
   const deps: BenchDeps = {
     target,
+    environment: ENVIRONMENT,
     metrics,
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now: () => Date.now(),
@@ -153,9 +181,8 @@ function fakeBench(
     windows,
     quotes,
     orders,
-    setStatus: (next: ConnectionStatus) => {
-      status = next
-    },
+    setStatus,
+    statusListeners: () => statusListeners.size,
     dispose: () => clearInterval(commitTimer),
   }
 }
@@ -278,6 +305,70 @@ describe('runBench', () => {
     fake.setStatus('reconnecting')
     const [result] = await runOk([BASE], fake)
     expect(result.endedLive).toBe(false)
+    expect(result.unrecovered).toBe(1)
+  })
+
+  it('measures recovery (disconnect → live) per forced disconnect and unsubscribes after the phase', async () => {
+    const fake = fakeBench()
+    const [faults, clean] = await runOk([{ ...BASE, disconnects: 3, group: 'faults' }, BASE], fake)
+    expect([faults.recoveries, faults.recoveryP50Ms, faults.recoveryMaxMs, faults.unrecovered]).toEqual([
+      3,
+      RECONNECT_MS + RESYNC_MS,
+      RECONNECT_MS + RESYNC_MS,
+      0,
+    ])
+    expect([clean.recoveries, clean.recoveryP50Ms, clean.recoveryMaxMs]).toEqual([0, 'n/a', 'n/a'])
+    expect(fake.statusListeners()).toBe(0)
+  })
+
+  it('stores the run environment with the phase seed and measured display Hz', async () => {
+    const fake = fakeBench()
+    // 60 Hz frames inside the window.
+    const frames = setInterval(() => fake.deps.metrics.recordFrame(16.67), 17)
+    const [result] = await runOk([{ ...BASE, seed: 7 }], fake)
+    clearInterval(frames)
+    expect(result.environment).toEqual({ ...ENVIRONMENT, displayHz: 60, seed: 7 })
+    expect(result.displayHz).toBe(60)
+    expect(result.pctFramesOverBudget).toBe(0)
+  })
+
+  it('reports frame budget, LoAF per minute and INP over the measured window', async () => {
+    const fake = fakeBench()
+    // A sampling env whose LoAF/Event Timing observers are "supported"; frames are fed by hand.
+    const release = fake.deps.metrics.acquireSampling({
+      requestFrame: () => () => {},
+      observeLongTasks: () => () => {},
+      observeLongAnimationFrames: () => ({ supported: true, stop: () => {} }),
+      observeEventTiming: () => ({ supported: true, stop: () => {} }),
+    })
+    const metrics = fake.deps.metrics
+    // Warm-up (excluded): a huge LoAF and an interaction.
+    setTimeout(() => {
+      metrics.recordLongAnimationFrame({ durationMs: 400, blockingMs: 300 })
+      metrics.recordEventTiming([{ interactionId: 1, durationMs: 500 }])
+    }, 500)
+    // Window 1 s – 11 s: 3 frames (1 over budget), 2 LoAFs, 2 interactions.
+    setTimeout(() => {
+      for (const ms of [16.67, 16.67, 40]) metrics.recordFrame(ms)
+      metrics.recordLongAnimationFrame({ durationMs: 90, blockingMs: 30 })
+      metrics.recordLongAnimationFrame({ durationMs: 60, blockingMs: 45 })
+      metrics.recordEventTiming([
+        { interactionId: 2, durationMs: 24 },
+        { interactionId: 2, durationMs: 64 },
+        { interactionId: 3, durationMs: 32 },
+      ])
+    }, 2_000)
+    const [result] = await runOk([BASE], fake)
+    release()
+    expect([result.frameP50Ms, result.frameP95Ms, result.frameP99Ms, result.pctFramesOverBudget]).toEqual([16.67, 40, 40, 33.33])
+    expect([result.loafPerMin, result.loafMaxMs, result.loafBlockingMaxMs]).toEqual([12, 90, 45])
+    expect([result.interactions, result.inpP75Ms, result.inpMaxMs]).toEqual([2, 64, 64])
+  })
+
+  it('reports n/a for LoAF and INP when unsupported or idle', async () => {
+    const [result] = await runOk([BASE], fakeBench())
+    expect([result.loafPerMin, result.loafMaxMs, result.loafBlockingMaxMs]).toEqual(['n/a', 'n/a', 'n/a'])
+    expect([result.interactions, result.inpP75Ms, result.inpMaxMs]).toEqual([0, 'n/a', 'n/a'])
   })
 
   it('probe alternates sides, counts fills and rejects and measures realized slippage in cents', async () => {
@@ -528,6 +619,15 @@ describe('scale scenario', () => {
     expect(batch.filter((p) => p.aggregation === 'compact').map((p) => p.batchMs)).toEqual([4, 8, 16, 33])
     expect(batch.filter((p) => p.aggregation === 'full').map((p) => p.batchMs)).toEqual([16])
     expect(names).toContain('scale 5000/s full b100')
+  })
+})
+
+describe('readCpuThrottleLabel', () => {
+  it('reads &cpu= as a trimmed, bounded label; none when absent', () => {
+    expect(readCpuThrottleLabel('?bench=realistic&cpu=4x')).toBe('4x')
+    expect(readCpuThrottleLabel('?bench=realistic&cpu=%20')).toBe('none')
+    expect(readCpuThrottleLabel('?bench=realistic')).toBe('none')
+    expect(readCpuThrottleLabel(`?cpu=${'x'.repeat(100)}`)).toHaveLength(32)
   })
 })
 

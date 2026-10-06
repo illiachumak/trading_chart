@@ -3,7 +3,8 @@
 // same collectors the HUD uses. Pure — the browser wiring is in useBench.
 
 import { BATCH_INTERVAL_MS, DEFAULT_AGGREGATION, DEFAULT_TRADES_PER_SEC } from '@/config/market'
-import type { PerfMetrics } from '@/lib/perf/perf-metrics'
+import { type RecoveryTimeline, type StatusSample, percentileOfSorted, recoveryTimes } from '@/lib/perf/metrics-math'
+import type { PerfMetrics, PerfSnapshot } from '@/lib/perf/perf-metrics'
 import { ratesPerSecond } from '@/lib/perf/rates'
 import type { ClientStats, ConnectionStatus } from '@/lib/realtime/market-client'
 import type {
@@ -77,6 +78,8 @@ export type BenchTarget = {
   sendDev(command: DevCommand): void
   stats(): ClientStats
   status(): ConnectionStatus
+  /** Subscribes to client status changes (recovery timeline); returns unsubscribe. */
+  onStatus(listener: (status: ConnectionStatus) => void): () => void
   /** Asks the server for its tick stats; 'timeout' after 1 s (e.g. while disconnected). */
   serverStats(): Promise<ServerTickStats | 'timeout'>
   /** Fresh quote for (side, amount); resolves 'timeout' after 2 s, 'no_round' before the first round. */
@@ -87,8 +90,23 @@ export type BenchTarget = {
   placeOrder(request: OrderProbeRequest): Promise<OrderResult | 'timeout' | 'no_round'>
 }
 
+/** Run-level environment, the same for every phase of a run. */
+export type BenchRunEnvironment = {
+  userAgent: string
+  devicePixelRatio: number
+  hardwareConcurrency: number
+  /** Short git hash baked in at build time; 'unknown' when git was unavailable. */
+  buildHash: string
+  /** Free-text label from the URL `&cpu=` (e.g. '4x', 'pixel7'); metadata only, nothing is throttled. 'none' when absent. */
+  cpuThrottleLabel: string
+}
+
+/** Environment metadata stored with every phase result: run-level fields + what the window measured. */
+export type BenchEnvironment = BenchRunEnvironment & { displayHz: number | 'n/a'; seed: number | 'live' }
+
 export type BenchDeps = {
   target: BenchTarget
+  environment: BenchRunEnvironment
   metrics: PerfMetrics
   sleep(ms: number): Promise<void>
   /** Monotonic clock (performance.now in the browser). */
@@ -118,8 +136,14 @@ export type BenchPhaseResult = {
   windowEndMs: number
   /** Date.now() at window start. */
   wallClockStartMs: number
+  /** Metadata only (1000 / median frame); compare runs by frame percentiles and pctFramesOverBudget. */
   fps: number
+  frameP50Ms: number
   frameP95Ms: number
+  frameP99Ms: number
+  /** % of frames longer than the 16.7 ms (60 Hz) budget. */
+  pctFramesOverBudget: number
+  displayHz: number | 'n/a'
   flushP50Ms: number
   flushP95Ms: number
   flushMaxMs: number
@@ -139,6 +163,14 @@ export type BenchPhaseResult = {
   longTasks: number
   /** Longest long task inside the measured window. */
   longTaskMaxMs: number
+  /** Long Animation Frames per minute of window; 'n/a' where the API is unsupported (non-Chromium). */
+  loafPerMin: number | 'n/a'
+  loafMaxMs: number | 'n/a'
+  loafBlockingMaxMs: number | 'n/a'
+  /** INP-style: interactions in the window (Event Timing, ≥16 ms entries only) and their p75 / max latency. */
+  interactions: number
+  inpP75Ms: number | 'n/a'
+  inpMaxMs: number | 'n/a'
   /** Worker `tick()` calls per second; below 1000 / batchMs = the worker can't keep its batch interval. */
   serverTicksPerSec: number | 'n/a'
   serverTickMsAvg: number | 'n/a'
@@ -149,9 +181,17 @@ export type BenchPhaseResult = {
   resyncs: number
   duplicates: number
   reconnects: number
+  /** Outages (status left `live`) that started in the window and recovered by the end of settle. */
+  recoveries: number
+  /** Disconnect → live, per outage; 'n/a' without outages. */
+  recoveryP50Ms: number | 'n/a'
+  recoveryMaxMs: number | 'n/a'
+  /** Outages still open when the settle wait gave up. */
+  unrecovered: number
   endedLive: boolean
   probeConfig: ProbeConfig | 'off'
   probe: ProbeResult | 'off'
+  environment: BenchEnvironment
 }
 
 // --- Scenarios (see the "Experiment design" table in the PR 4 v2 plan) ---
@@ -268,10 +308,12 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
-/** Nearest-rank percentile of an ascending array; 0 when empty. */
-function percentile(sorted: readonly number[], p: number): number {
-  if (sorted.length === 0) return 0
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]
+const MAX_CPU_LABEL_LENGTH = 32
+
+/** `&cpu=` label from a query string (metadata only: says how the tester throttled the CPU); 'none' when absent. */
+export function readCpuThrottleLabel(search: string): string {
+  const label = (new URLSearchParams(search).get('cpu') ?? '').trim().slice(0, MAX_CPU_LABEL_LENGTH)
+  return label === '' ? 'none' : label
 }
 
 /** Chrome-only `performance.memory.usedJSHeapSize`, in MB. */
@@ -279,6 +321,37 @@ export function readHeapMb(perf: unknown): number | 'n/a' {
   if (!isRecord(perf) || !isRecord(perf.memory)) return 'n/a'
   const used = perf.memory.usedJSHeapSize
   return typeof used === 'number' && Number.isFinite(used) ? round2(used / BYTES_PER_MB) : 'n/a'
+}
+
+function optionalRound2(value: number | 'n/a'): number | 'n/a' {
+  return value === 'n/a' ? value : round2(value)
+}
+
+const MS_PER_MIN = 60_000
+
+function loafWindow(
+  snap: PerfSnapshot,
+  count: number,
+  elapsedMs: number,
+): Pick<BenchPhaseResult, 'loafPerMin' | 'loafMaxMs' | 'loafBlockingMaxMs'> {
+  if (!snap.loafSupported || elapsedMs <= 0) return { loafPerMin: 'n/a', loafMaxMs: 'n/a', loafBlockingMaxMs: 'n/a' }
+  return {
+    loafPerMin: round2((count / elapsedMs) * MS_PER_MIN),
+    loafMaxMs: round2(snap.windowLoafMaxMs),
+    loafBlockingMaxMs: round2(snap.windowLoafBlockingMaxMs),
+  }
+}
+
+function recoverySummary(
+  timeline: RecoveryTimeline,
+): Pick<BenchPhaseResult, 'recoveries' | 'recoveryP50Ms' | 'recoveryMaxMs' | 'unrecovered'> {
+  const sorted = [...timeline.recoveredMs].sort((a, b) => a - b)
+  return {
+    recoveries: sorted.length,
+    recoveryP50Ms: sorted.length > 0 ? round2(percentileOfSorted(sorted, 0.5)) : 'n/a',
+    recoveryMaxMs: sorted.length > 0 ? round2(sorted[sorted.length - 1]) : 'n/a',
+    unrecovered: timeline.unrecovered,
+  }
 }
 
 type ServerTickWindow = Pick<BenchPhaseResult, 'serverTicksPerSec' | 'serverTickMsAvg' | 'serverTickMsMax'>
@@ -333,8 +406,8 @@ function summarizeProbe(tally: ProbeTally): ProbeResult {
     n,
     fillRate: n > 0 ? round2(tally.filled / n) : 0,
     realizedSlippageCents: {
-      p50: round2(percentile(sorted, 0.5)),
-      p95: round2(percentile(sorted, 0.95)),
+      p50: round2(percentileOfSorted(sorted, 0.5)),
+      p95: round2(percentileOfSorted(sorted, 0.95)),
       max: round2(sorted.length > 0 ? sorted[sorted.length - 1] : 0),
     },
   }
@@ -421,7 +494,20 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     await deps.sleep(scenario.warmupMs)
     if (deps.isCancelled()) return 'cancelled'
 
+    const result = await measurePhase(p, deps)
+    if (result === 'cancelled') return 'cancelled'
+    results.push(result)
+  }
+  return results
+}
+
+/** One measured window plus its settle (probe drain, wait for live). Status listener is always removed. */
+async function measurePhase(p: BenchPhase, deps: BenchDeps): Promise<BenchPhaseResult | 'cancelled'> {
+  const timeline: StatusSample[] = []
+  const stopTimeline = deps.target.onStatus((status) => timeline.push({ at: deps.now(), status }))
+  try {
     deps.metrics.clearSamples()
+    timeline.push({ at: deps.now(), status: deps.target.status() })
     const startStats = { ...deps.target.stats() }
     const startTotals = deps.metrics.snapshot().totals
     const startedAt = deps.now()
@@ -469,11 +555,14 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
     if (deps.isCancelled()) return 'cancelled'
     const endedLive = await waitForLive(deps)
     if (deps.isCancelled()) return 'cancelled'
+    // Outages that started in the window and recovered while settling still count.
+    const recovery = recoveryTimes(timeline)
     // Dev commands are dropped while disconnected, so the reset goes out once live again.
     deps.target.sendDev({ kind: 'set_latency', ms: 0 })
     deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })
 
-    results.push({
+    const displayHz = snap.displayHz
+    return {
       phase: p.name,
       group: p.group,
       tradesPerSec: p.tradesPerSec,
@@ -487,7 +576,11 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       windowEndMs: round2(endedAt),
       wallClockStartMs,
       fps: snap.fps,
+      frameP50Ms: round2(snap.frameP50),
       frameP95Ms: round2(snap.frameP95),
+      frameP99Ms: round2(snap.frameP99),
+      pctFramesOverBudget: round2(snap.pctFramesOverBudget),
+      displayHz,
       flushP50Ms: round2(snap.flushP50),
       flushP95Ms: round2(snap.flushP95),
       flushMaxMs: round2(snap.flushMax),
@@ -502,16 +595,23 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       commitsPerSec: Object.fromEntries(Object.entries(commits).map(([id, rate]) => [id, round2(rate)])),
       longTasks: snap.totals.longTasks - startTotals.longTasks,
       longTaskMaxMs: round2(snap.windowLongTaskMaxMs),
+      ...loafWindow(snap, snap.totals.longAnimationFrames - startTotals.longAnimationFrames, elapsedMs),
+      interactions: snap.interactions.count,
+      inpP75Ms: optionalRound2(snap.interactions.p75Ms),
+      inpMaxMs: optionalRound2(snap.interactions.maxMs),
       ...serverTicks,
       heapMb,
       gaps: endStats.gaps - startStats.gaps,
       resyncs: endStats.resyncs - startStats.resyncs,
       duplicates: endStats.duplicates - startStats.duplicates,
       reconnects: endStats.reconnects - startStats.reconnects,
+      ...recoverySummary(recovery),
       endedLive,
       probeConfig: p.probe,
       probe: probeResult,
-    })
+      environment: { ...deps.environment, displayHz, seed: p.seed },
+    }
+  } finally {
+    stopTimeline()
   }
-  return results
 }

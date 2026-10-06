@@ -1,13 +1,17 @@
 // Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix|deep|scale`.
+// `&cpu=<label>` (e.g. `4x`) is stored in each result's environment as metadata only; nothing is throttled.
+// `&cpu=<label>` (e.g. `4x`) is stored in each result's environment as metadata only; nothing is throttled.
 // Harness hooks: `<html data-bench-phase>` is the phase name only inside the measured window,
 // `warmup:<name>` before it, `settle` after it and `done` at the end, so an external CDP sampler can
 // align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.
 
 import { useEffect, useState } from 'react'
 import { BENCH_AVAILABLE } from '@/config/bench'
+import { BUILD_HASH } from '@/config/build'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import {
   type BenchPhaseResult,
+  type BenchRunEnvironment,
   type BenchScenario,
   type BenchTarget,
   type ProbeQuote,
@@ -16,6 +20,7 @@ import {
   MATRIX_SCENARIO,
   SCALE_SCENARIO,
   QUICK_SCENARIO,
+  readCpuThrottleLabel,
   readHeapMb,
   runBench,
 } from '@/lib/perf/bench'
@@ -80,6 +85,7 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
     sendDev: (command) => runtime.send({ type: 'dev', command }),
     stats: () => runtime.client.stats,
     status: () => runtime.client.getStatus(),
+    onStatus: (listener) => runtime.client.onStatus(listener),
     serverStats: () => {
       const answer = waitForMessage(
         runtime,
@@ -122,6 +128,16 @@ function createBenchTarget(runtime: MarketRuntime): BenchTarget {
   }
 }
 
+function readEnvironment(): BenchRunEnvironment {
+  return {
+    userAgent: navigator.userAgent,
+    devicePixelRatio: window.devicePixelRatio,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    buildHash: BUILD_HASH,
+    cpuThrottleLabel: readCpuThrottleLabel(window.location.search),
+  }
+}
+
 /** Runs the benchmark once the session is live; 'disabled' without `?bench=`. */
 export function useBench(): BenchState | 'disabled' {
   const runtime = useMarketRuntime()
@@ -141,6 +157,7 @@ export function useBench(): BenchState | 'disabled' {
       }
       const results = await runBench(scenario, {
         target: createBenchTarget(runtime),
+        environment: readEnvironment(),
         metrics: perfMetrics,
         sleep,
         now: () => performance.now(),
