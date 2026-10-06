@@ -9,6 +9,7 @@ import {
   type ServerMessage,
 } from '@/lib/realtime/protocol'
 import type { Socket, SocketFactory } from '@/lib/realtime/socket'
+import { isRecord } from '@/lib/utils/is-record'
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'resyncing' | 'live' | 'reconnecting'
 
@@ -37,6 +38,11 @@ export type MarketClientOptions = {
 }
 
 type Timer = ReturnType<typeof setTimeout>
+
+/** The server-message guard checks only the envelope, so a missing or malformed aggregate counts as none. */
+function aggregatedCount(aggregated: unknown): number {
+  return isRecord(aggregated) && typeof aggregated.count === 'number' ? aggregated.count : 0
+}
 type SnapshotMessage = Extract<ServerMessage, { type: 'snapshot' }>
 
 export class MarketClient {
@@ -271,7 +277,7 @@ export class MarketClient {
     this.lastSeq = message.seq
     if (message.type === 'trades') {
       this.stats.tradeItems += message.items.length
-      this.stats.trades += message.items.length + (message.aggregated === 'none' ? 0 : message.aggregated.count)
+      this.stats.trades += message.items.length + aggregatedCount(message.aggregated)
     }
     if (message.type === 'order_result') this.inflight.delete(message.result.clientOrderId)
     this.deliver(message)

@@ -138,6 +138,19 @@ describe('MarketClient', () => {
     expect(client.stats.tradeItems).toBe(3)
   })
 
+  it('treats a missing or malformed aggregate as none (envelope-only guard)', () => {
+    const { fake, client, goLive } = setup()
+    goLive(10)
+    const socket = fake.latest()
+    const trade = { id: 1, ts: 0, side: 'yes', shares: 5, priceAfter: 0.5, source: 'mock' }
+    socket.handlers.onMessage(JSON.stringify({ type: 'trades', seq: 11, ts: 0, items: [trade] }))
+    socket.handlers.onMessage(JSON.stringify({ type: 'trades', seq: 12, ts: 0, items: [trade], aggregated: 5 }))
+    socket.handlers.onMessage(JSON.stringify({ type: 'trades', seq: 13, ts: 0, items: [trade], aggregated: { count: 'x' } }))
+    expect(client.getLastSeq()).toBe(13)
+    expect(client.stats.trades).toBe(3)
+    expect(client.stats.tradeItems).toBe(3)
+  })
+
   it('buffers messages that arrive before the snapshot', () => {
     const { fake, client, seen } = setup()
     client.start()
