@@ -51,7 +51,7 @@ const user = (id: number, priceAfter: number): Trade => ({
   source: 'user',
   clientOrderId: `o${id}`,
 })
-const trades = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items })
+const trades = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items, aggregated: 'none' })
 
 /** Minimal client double: records sends and lets tests emit messages and status changes. */
 function fakeClient() {
@@ -283,7 +283,7 @@ describe('MarketStore lifecycle', () => {
     market.handle(snapshot(1))
     vi.advanceTimersByTime(1_000)
     // Server clock is 5 s ahead: ts = local now + 5000.
-    market.handle({ type: 'trades', seq: 2, ts: 6_000, items: [mock(1, 0.5)] })
+    market.handle({ type: 'trades', seq: 2, ts: 6_000, items: [mock(1, 0.5)], aggregated: 'none' })
     vi.advanceTimersByTime(300)
     expect(selectClockOffset(market.store.getState())).toBe(5_000)
   })

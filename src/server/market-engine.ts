@@ -128,7 +128,7 @@ export class MarketEngine {
     let accountDirty = false
 
     const flush = (ts: number): void => {
-      if (trades.length > 0) out.push({ type: 'trades', ts, items: trades })
+      if (trades.length > 0) out.push({ type: 'trades', ts, items: trades, aggregated: 'none' })
       for (const result of results) out.push({ type: 'order_result', ts, result })
       if (accountDirty) out.push({ type: 'account', ts, account: this.account() })
       trades = []

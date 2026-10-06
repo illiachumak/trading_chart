@@ -16,6 +16,16 @@ export type Trade =
   | (TradeBase & { source: 'mock' })
   | (TradeBase & { source: 'user'; clientOrderId: string })
 
+/** Trades the server left out of a compacted `trades` batch, summarised. */
+export type TradeAggregate = { count: number; volumeShares: number }
+
+/**
+ * 'full': every trade is shipped. 'compact': per batch only the last trade of each second
+ * (the chart point), the newest few trades (the feed) and all user trades are shipped;
+ * the rest is summarised in `aggregated`.
+ */
+export type AggregationMode = 'full' | 'compact'
+
 export type Position = {
   yesShares: number
   noShares: number
@@ -68,6 +78,7 @@ export type DevCommand =
   | { kind: 'set_latency'; ms: number }
   | { kind: 'set_drop_rate'; rate: number }
   | { kind: 'set_batch_interval'; ms: number }
+  | { kind: 'set_aggregation'; mode: AggregationMode }
   /** Dev/bench only: overwrites the cash balance, which breaks the starting-capital invariant (START_BALANCE). */
   | { kind: 'set_balance'; usd: number }
   | { kind: 'force_disconnect' }
@@ -94,7 +105,14 @@ export type ClientMessage =
   | { type: 'dev'; command: DevCommand }
 
 export type ServerPayload =
-  | { type: 'trades'; ts: number; items: readonly Trade[] }
+  | {
+      type: 'trades'
+      ts: number
+      /** ts-ordered. In compact mode a subset of the batch (see AggregationMode). */
+      items: readonly Trade[]
+      /** Trades omitted from `items`; 'none' when every trade of the batch is in `items`. */
+      aggregated: TradeAggregate | 'none'
+    }
   | { type: 'round_started'; ts: number; round: RoundInfo; price: number }
   | { type: 'round_resolved'; ts: number; roundId: number; outcome: Side; payout: number }
   | { type: 'order_result'; ts: number; result: OrderResult }
@@ -163,6 +181,8 @@ function isDevCommand(value: unknown): value is DevCommand {
       return isNumber(value.rate)
     case 'set_batch_interval':
       return typeof value.ms === 'number' && Number.isFinite(value.ms)
+    case 'set_aggregation':
+      return value.mode === 'full' || value.mode === 'compact'
     case 'set_balance':
       return typeof value.usd === 'number' && Number.isFinite(value.usd)
     case 'force_disconnect':

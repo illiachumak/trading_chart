@@ -12,7 +12,7 @@ const trade = (id: number, ts: number, priceAfter: number): Trade => ({
   source: 'mock',
 })
 
-const tradesMessage = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items })
+const tradesMessage = (seq: number, items: Trade[]): ServerMessage => ({ type: 'trades', seq, ts: 0, items, aggregated: 'none' })
 
 const snapshotMessage = (seq: number, history: ChartPoint[]): ServerMessage => ({
   type: 'snapshot',

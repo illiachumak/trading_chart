@@ -62,6 +62,16 @@ describe('parseClientMessage', () => {
       type: 'dev',
       command: { kind: 'set_balance', usd: 1000 },
     })
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_aggregation' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_aggregation', mode: 'all' } }))).toBe(
+      'invalid',
+    )
+    for (const mode of ['full', 'compact'] as const) {
+      expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_aggregation', mode } }))).toEqual({
+        type: 'dev',
+        command: { kind: 'set_aggregation', mode },
+      })
+    }
     expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'force_disconnect' } }))).toEqual({
       type: 'dev',
       command: { kind: 'force_disconnect' },

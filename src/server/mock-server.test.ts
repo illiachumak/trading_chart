@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BATCH_INTERVAL_MS, MAX_BATCH_INTERVAL_MS, MIN_BATCH_INTERVAL_MS } from '@/config/market'
+import { BATCH_INTERVAL_MS, FEED_TRADES_PER_BATCH, MAX_BATCH_INTERVAL_MS, MIN_BATCH_INTERVAL_MS } from '@/config/market'
 import type { WorkerToMain } from '@/lib/realtime/bridge'
 import { type ClientMessage, parseServerMessage, type ServerMessage } from '@/lib/realtime/protocol'
 import { DEFAULT_SERVER_CONFIG, MockServer, type ServerConfig } from '@/server/mock-server'
@@ -90,6 +90,35 @@ describe('MockServer', () => {
     expect(accounts.at(-1)?.balance).toBe(250)
     t.send(1, { type: 'dev', command: { kind: 'set_balance', usd: -5 } })
     expect(t.messagesFor(1).flatMap((m) => (m.type === 'account' ? [m.account] : [])).at(-1)?.balance).toBe(250)
+  })
+
+  it('compacts trade batches by default and ships every trade in full mode', () => {
+    const t = setup({ tradesPerSec: 5_000 })
+    expect(DEFAULT_SERVER_CONFIG.aggregation).toBe('compact')
+    t.connect(1)
+    t.tickFor(1_000)
+    const batches = (): Extract<ServerMessage, { type: 'trades' }>[] =>
+      t.messagesFor(1).flatMap((m) => (m.type === 'trades' ? [m] : []))
+    const compact = batches()
+    expect(compact.length).toBeGreaterThan(5)
+    let represented = 0
+    for (const batch of compact) {
+      expect(batch.items.length).toBeLessThanOrEqual(FEED_TRADES_PER_BATCH + 2)
+      if (batch.aggregated === 'none') throw new Error('a ~500-trade batch must be aggregated')
+      expect(batch.aggregated.count).toBeGreaterThan(300)
+      represented += batch.items.length + batch.aggregated.count
+    }
+    // Trade ids start at 1 and the newest trade of a batch is always shipped: nothing is lost.
+    expect(represented).toBe(compact.at(-1)?.items.at(-1)?.id)
+    t.posted.length = 0
+    t.send(1, { type: 'dev', command: { kind: 'set_aggregation', mode: 'full' } })
+    t.tickFor(500)
+    const full = batches()
+    expect(full.length).toBeGreaterThan(3)
+    for (const batch of full) {
+      expect(batch.aggregated).toBe('none')
+      expect(batch.items.length).toBeGreaterThan(300)
+    }
   })
 
   it('acknowledges a connection', () => {
