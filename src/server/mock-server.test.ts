@@ -111,7 +111,7 @@ describe('MockServer', () => {
       side: 'yes',
       amountUsd: 25,
       expectedPrice: quoteMsg.quote.avgPrice,
-      maxSlippage: 0.5,
+      maxSlippage: 0.1,
     })
     t.tickFor(100)
     const result = t.messagesFor(1).find((m) => m.type === 'order_result')

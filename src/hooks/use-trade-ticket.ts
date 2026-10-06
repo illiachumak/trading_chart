@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { DEFAULT_MAX_SLIPPAGE } from '@/config/market'
 import { useMarket } from '@/hooks/use-market'
 import { usePlaceOrder } from '@/hooks/use-place-order'
 import { useQuote } from '@/hooks/use-quote'
@@ -13,6 +14,8 @@ export type TradeTicket = {
   amountInput: string
   setAmountInput: (value: string) => void
   amountValid: boolean
+  slippage: number
+  setSlippage: (value: number) => void
   quote: QuoteResult | 'none'
   order: OrderStatus
   canSubmit: boolean
@@ -22,6 +25,7 @@ export type TradeTicket = {
 export function useTradeTicket(): TradeTicket {
   const [side, setSideState] = useState<Side>('yes')
   const [amountInput, setAmountState] = useState('10')
+  const [slippage, setSlippageState] = useState<number>(DEFAULT_MAX_SLIPPAGE)
   const amount = parseAmount(amountInput)
   const quote = useQuote(side, amount)
   const round = useMarket(selectRound)
@@ -38,6 +42,11 @@ export function useTradeTicket(): TradeTicket {
     dismiss()
   }
 
+  const setSlippage = (value: number): void => {
+    setSlippageState(value)
+    dismiss()
+  }
+
   // Single source of truth for "can this ticket be sent right now", narrowed for submit().
   const ready =
     status === 'live' && round !== 'loading' && quote !== 'none' && quote.status === 'ok' && order.kind !== 'pending'
@@ -47,7 +56,13 @@ export function useTradeTicket(): TradeTicket {
   const submit = (): void => {
     if (ready === 'not-ready') return
     // The quote's average price is what the user saw; the server enforces slippage against it.
-    place({ roundId: ready.roundId, side, amountUsd: ready.quote.amountUsd, expectedPrice: ready.quote.avgPrice })
+    place({
+      roundId: ready.roundId,
+      side,
+      amountUsd: ready.quote.amountUsd,
+      expectedPrice: ready.quote.avgPrice,
+      maxSlippage: slippage,
+    })
   }
 
   return {
@@ -56,6 +71,8 @@ export function useTradeTicket(): TradeTicket {
     amountInput,
     setAmountInput,
     amountValid: amount !== 'invalid',
+    slippage,
+    setSlippage,
     quote,
     order,
     canSubmit: ready !== 'not-ready',

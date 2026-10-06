@@ -20,6 +20,11 @@ export function formatCents(price: number): string {
   return `${(price * 100).toFixed(1)}¢`
 }
 
+/** Whole-cent label for an absolute price tolerance, e.g. 0.03 -> "3¢". */
+export function formatSlippage(tolerance: number): string {
+  return `${Math.round(tolerance * 100)}¢`
+}
+
 export function formatSideCents(yesPrice: number, side: Side): string {
   return formatCents(side === 'yes' ? yesPrice : 1 - yesPrice)
 }

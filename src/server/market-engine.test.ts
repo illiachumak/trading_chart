@@ -9,6 +9,7 @@ const CONFIG: EngineConfig = {
   liquidity: 3_000,
   priceBound: 0.85,
   startBalance: 1_000,
+  maxSlippage: 0.1,
   roundMs: 60_000,
   recentTradesLimit: 20,
   roundHistoryLimit: 20,
@@ -31,7 +32,7 @@ function order(overrides: Partial<PlaceOrder> = {}): PlaceOrder {
     side: 'yes',
     amountUsd: 100,
     expectedPrice: 0.6,
-    maxSlippage: 0.02,
+    maxSlippage: 0.03,
     ...overrides,
   }
 }
@@ -109,6 +110,33 @@ describe('MarketEngine', () => {
     expect(result).toMatchObject({ status: 'rejected', reason: 'slippage' })
     if (result.status !== 'rejected') throw new Error('expected rejection')
     expect(result.currentPrice).toBeCloseTo(engine.getPrice(), 12)
+  })
+
+  it('fills when the price moved by less than the absolute tolerance', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
+    engine.enqueueMock(999, 60) // moves the average by roughly 1-2 cents
+    const [{ result }] = ofType(engine.advance(1_000), 'order_result')
+    expect(result.status).toBe('filled')
+  })
+
+  it('rejects with slippage when the price moved by more than the tolerance', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.01 }))
+    engine.enqueueMock(999, 400)
+    const [{ result }] = ofType(engine.advance(1_000), 'order_result')
+    expect(result).toMatchObject({ status: 'rejected', reason: 'slippage' })
+  })
+
+  it.each([0.11, -0.01, Number.NaN])('rejects maxSlippage %s as invalid', (maxSlippage) => {
+    const engine = makeEngine()
+    engine.enqueueOrder(10, order({ maxSlippage }))
+    const [{ result }] = ofType(engine.advance(10), 'order_result')
+    expect(result).toMatchObject({ status: 'rejected', reason: 'invalid' })
   })
 
   it('a later mock trade executes after the user order', () => {

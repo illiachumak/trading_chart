@@ -3,6 +3,7 @@ import { Panel } from '@/components/common/panel'
 import { AmountInput } from '@/components/features/trade-panel/amount-input'
 import { OrderStatusLine } from '@/components/features/trade-panel/order-status-line'
 import { QuoteSummary } from '@/components/features/trade-panel/quote-summary'
+import { SlippageSelector } from '@/components/features/trade-panel/slippage-selector'
 import { SideButton } from '@/components/features/trade-panel/side-button'
 import { useTradeTicket } from '@/hooks/use-trade-ticket'
 import { SIDE_LABEL } from '@/lib/utils/side'
@@ -16,8 +17,9 @@ export function TradeTicket() {
         <SideButton side="no" selected={ticket.side === 'no'} onSelect={ticket.setSide} />
       </div>
       <AmountInput value={ticket.amountInput} valid={ticket.amountValid} onChange={ticket.setAmountInput} />
+      <SlippageSelector value={ticket.slippage} onChange={ticket.setSlippage} />
       <div className="border-b-hairline border-border" />
-      <QuoteSummary quote={ticket.quote} />
+      <QuoteSummary quote={ticket.quote} slippage={ticket.slippage} />
       <Button variant="primary" className="w-full" disabled={!ticket.canSubmit} onClick={ticket.submit}>
         {ticket.order.kind === 'pending' ? 'Placing…' : `Buy ${SIDE_LABEL[ticket.side]}`}
       </Button>

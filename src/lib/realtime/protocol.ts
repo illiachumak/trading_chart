@@ -78,7 +78,7 @@ export type PlaceOrder = {
   amountUsd: number
   /** Average price the user saw (from the latest quote). */
   expectedPrice: number
-  /** Allowed relative worsening of the average price, e.g. 0.02 = 2%. */
+  /** Allowed absolute worsening of the average price in price units, e.g. 0.03 = 3¢. */
   maxSlippage: number
 }
 

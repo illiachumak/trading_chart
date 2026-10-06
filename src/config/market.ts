@@ -38,7 +38,10 @@ export const PERF_SAMPLE_CAPACITY = 4_000
 // UI
 export const QUOTE_DEBOUNCE_MS = 150
 export const QUOTE_REFRESH_MS = 1_000
-export const DEFAULT_MAX_SLIPPAGE = 0.02
+/** Absolute slippage tolerance in price units (0.03 = 3¢). */
+export const DEFAULT_MAX_SLIPPAGE = 0.03
+export const MAX_SLIPPAGE = 0.1
+export const SLIPPAGE_OPTIONS = [0.03, 0.05, 0.1] as const
 export const STRESS_TRADES_PER_SEC = 500
 export const HUD_REFRESH_MS = 500
 /** Dev panel slider ranges — narrower than the server limits (MAX_LATENCY_MS, MAX_DROP_RATE) for usable steps. */

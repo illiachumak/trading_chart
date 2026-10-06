@@ -25,6 +25,8 @@ export type EngineConfig = {
   liquidity: number
   priceBound: number
   startBalance: number
+  /** Largest accepted `PlaceOrder.maxSlippage` (absolute price units). */
+  maxSlippage: number
   roundMs: number
   recentTradesLimit: number
   roundHistoryLimit: number
@@ -232,7 +234,8 @@ export class MarketEngine {
       !isPositiveFinite(amountUsd) ||
       !isPositiveFinite(request.expectedPrice) ||
       !Number.isFinite(request.maxSlippage) ||
-      request.maxSlippage < 0
+      request.maxSlippage < 0 ||
+      request.maxSlippage > this.config.maxSlippage
     ) {
       return reject('invalid')
     }
@@ -241,7 +244,7 @@ export class MarketEngine {
     const fill = buyWithBudget(this.diff, side, amountUsd, this.config.liquidity, this.config.priceBound)
     if (fill.shares <= EPSILON) return reject('price_limit')
     const avgPrice = fill.cost / fill.shares
-    if (avgPrice > request.expectedPrice * (1 + request.maxSlippage) + EPSILON) return reject('slippage')
+    if (avgPrice > request.expectedPrice + request.maxSlippage + EPSILON) return reject('slippage')
 
     this.diff = fill.diffAfter
     this.balance -= fill.cost

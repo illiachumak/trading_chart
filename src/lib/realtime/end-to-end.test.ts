@@ -65,7 +65,7 @@ describe('client + mock server end to end', () => {
       side: 'yes',
       amountUsd: 10,
       expectedPrice: 0.99,
-      maxSlippage: 0.5,
+      maxSlippage: 0.1,
     })
     dev({ kind: 'force_disconnect' })
     await vi.advanceTimersByTimeAsync(3_000)
