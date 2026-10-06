@@ -2,6 +2,8 @@
 
 A Polymarket-style trading UI for a 60-second YES/NO market. Users buy outcome shares, and a share's price (0–100¢) is the market's implied probability. At the centre is a live price chart fed by a WebSocket tick stream. Everything around it (order ticket, trade feed, round header, account) is built to stay smooth, correct and measurable under heavy realtime load.
 
+**deployed app** https://tradingchart-khaki.vercel.app/
+
 - **Prediction-market trading UI.** Live price chart, realtime trade feed and order ticket.
 - **Messages.** About **13 messages/sec reach the browser at any market rate**. Tested up to **10,000 trades/sec** on the server; the smallest 4 ms batch peaks at ~180 msgs/sec.
 - **Markets.** **1 live market** in rounds of 60 s.
