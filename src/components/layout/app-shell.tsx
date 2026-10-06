@@ -1,3 +1,4 @@
+import { DevPanel } from '@/components/features/dev-tools/dev-panel'
 import { PriceChart } from '@/components/features/chart/price-chart'
 import { RoundHistory } from '@/components/features/round/round-history'
 import { RoundHeader } from '@/components/features/round/round-header'
@@ -39,7 +40,7 @@ export function AppShell() {
           </FeatureBoundary>
         </aside>
       </main>
-      {/* Task 6: DevPanel */}
+      <DevPanel />
     </div>
   )
 }

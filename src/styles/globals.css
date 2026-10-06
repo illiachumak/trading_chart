@@ -61,6 +61,12 @@
   border-bottom-width: 0.5px;
 }
 
+/* Top-only hairline */
+@utility border-t-hairline {
+  border-top-style: solid;
+  border-top-width: 0.5px;
+}
+
 /* Card shell used by every panel */
 @utility card {
   border-radius: var(--radius-card);
