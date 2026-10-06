@@ -64,6 +64,7 @@ repo/
 ## 4. State Management
 
 - Server state — TanStack Query only, do not duplicate in Zustand
+- **Exception — realtime push state.** Data that arrives over the WebSocket stream (market round/price/trades, account, order and quote results) lives in the external stores under `src/lib/realtime/` (`MarketStore`, `AccountStore`, built on `createExternalStore` + `useSyncExternalStore`), not in TanStack Query or Zustand. Rules: the store class owns the only writable handle and exposes a read-only `ExternalStore`; tick-driven fields are throttled (`UI_THROTTLE_MS`), discrete events publish immediately; the chart never reads from these stores (see §3). Rationale: `../common/specs/2026-10-06-adr-realtime-external-stores.md`
 - Local UI state — `useState` / `useReducer` inside the component
 - Zustand — global UI state only (auth, ui preferences, shell layout). Keep stores focused; no cross-store dependencies
 - Zustand stores live in `src/store/*-store.ts` (one store per concern)
