@@ -1,6 +1,7 @@
-import type { OrderResult, RejectReason } from '@/lib/realtime/protocol'
+import type { OrderStatus } from '@/lib/realtime/account-store'
+import type { OrderResult, QuoteResult, RejectReason } from '@/lib/realtime/protocol'
 import { PRICE_BOUND } from '@/config/market'
-import { formatCents, formatPercent, formatShares, formatUsd } from '@/lib/utils/format'
+import { formatCents, formatPercent, formatShares, formatUsd, PLACEHOLDER } from '@/lib/utils/format'
 import { SIDE_LABEL } from '@/lib/utils/side'
 
 export type OrderMessage = { tone: 'yes' | 'no' | 'warn'; text: string }
@@ -35,4 +36,27 @@ export function describeOrderResult(result: OrderResult): OrderMessage {
       }
       return { tone: 'warn', text: REJECTION_TEXT[result.reason] }
   }
+}
+
+/** Worst-case line for a quote; every number comes from the server quote, this only formats. */
+export function describeQuoteProtection(quote: Extract<QuoteResult, { status: 'ok' }> | 'none'): string {
+  const pay = quote === 'none' ? PLACEHOLDER : formatUsd(quote.cost)
+  const shares = quote === 'none' ? PLACEHOLDER : formatShares(quote.minShares)
+  const worst = quote === 'none' ? PLACEHOLDER : formatCents(quote.worstAvgPrice)
+  return `You pay ${pay} · at least ${shares} shares · worst avg ${worst}`
+}
+
+/**
+ * Price a retry would be placed at: the latest fillable quote's average, offered only while the
+ * last order's result is a slippage rejection. 'none' hides the retry.
+ */
+export function retryPriceFor(order: OrderStatus, quote: QuoteResult | 'none'): number | 'none' {
+  if (order.kind !== 'done' || order.result.status !== 'rejected' || order.result.reason !== 'slippage') return 'none'
+  if (quote === 'none' || quote.status !== 'ok') return 'none'
+  return quote.avgPrice
+}
+
+export function describeRetry(price: number): { label: string; ariaLabel: string } {
+  const cents = (price * 100).toFixed(1)
+  return { label: `Retry at ${formatCents(price)}`, ariaLabel: `Retry order at ${cents} cents` }
 }

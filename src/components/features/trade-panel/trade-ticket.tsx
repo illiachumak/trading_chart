@@ -2,6 +2,7 @@ import { Panel } from '@/components/common/panel'
 import { AmountInput } from '@/components/features/trade-panel/amount-input'
 import { OrderStatusLine } from '@/components/features/trade-panel/order-status-line'
 import { QuoteSummary } from '@/components/features/trade-panel/quote-summary'
+import { RetryButton } from '@/components/features/trade-panel/retry-button'
 import { SlippageSelector } from '@/components/features/trade-panel/slippage-selector'
 import { SubmitButton } from '@/components/features/trade-panel/submit-button'
 import { SideButton } from '@/components/features/trade-panel/side-button'
@@ -27,7 +28,11 @@ export function TradeTicket() {
         pending={ticket.order.kind === 'pending'}
         onSubmit={ticket.submit}
       />
-      <OrderStatusLine order={ticket.order} />
+      <div className="flex flex-col items-start gap-2">
+        <OrderStatusLine order={ticket.order} />
+        {/* Re-submits through the normal submit path with the latest quote (new clientOrderId). */}
+        <RetryButton side={ticket.side} amount={ticket.amount} slippage={ticket.slippage} onRetry={ticket.submit} />
+      </div>
     </Panel>
   )
 }
