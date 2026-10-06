@@ -130,6 +130,8 @@ export type BenchPhaseResult = {
   dropRate: number
   aggregation: AggregationMode
   seed: number | 'live'
+  /** The market was reset from `seed` (sent while live); false for 'live' phases or when the connection never came back. */
+  seedApplied: boolean
   durationSec: number
   /** Measured window in `now()` time (performance.now in the browser). */
   windowStartMs: number
@@ -373,7 +375,7 @@ function serverTickWindow(
   }
 }
 
-async function waitForLive(deps: BenchDeps): Promise<boolean> {
+async function waitForLive(deps: Pick<BenchDeps, 'target' | 'sleep'>): Promise<boolean> {
   for (let waited = 0; waited < LIVE_TIMEOUT_MS; waited += LIVE_POLL_MS) {
     if (deps.target.status() === 'live') return true
     await deps.sleep(LIVE_POLL_MS)
@@ -459,8 +461,14 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
   return summarizeProbe(tally)
 }
 
-/** Every phase sends all five settings, in this order, so no phase inherits the previous one's. */
-function applySettings(p: BenchPhase, target: BenchTarget): void {
+/**
+ * Every phase sends all five settings, in this order, so no phase inherits the previous one's.
+ * Seeded phases first wait for live: the transport drops dev commands while disconnected, so a
+ * reset sent then would silently leave the previous market running. Resolves whether the seed was applied.
+ */
+async function applySettings(p: BenchPhase, deps: Pick<BenchDeps, 'target' | 'sleep'>): Promise<boolean> {
+  const { target } = deps
+  const live = p.seed !== 'live' && (await waitForLive(deps))
   target.sendDev({ kind: 'set_rate', tradesPerSec: p.tradesPerSec })
   target.sendDev({ kind: 'set_batch_interval', ms: p.batchMs })
   target.sendDev({ kind: 'set_latency', ms: p.latencyMs })
@@ -468,9 +476,10 @@ function applySettings(p: BenchPhase, target: BenchTarget): void {
   target.sendDev({ kind: 'set_aggregation', mode: p.aggregation })
   // After set_rate: a rate change redraws the pending arrival gap, which would make the replay
   // depend on when the command landed. Before set_balance: the reset rebuilds the account.
-  if (p.seed !== 'live') target.sendDev({ kind: 'reset_market', seed: p.seed })
+  if (p.seed !== 'live' && live) target.sendDev({ kind: 'reset_market', seed: p.seed })
   // Probe orders spend cash; start every probe phase from the same balance.
   if (p.probe !== 'off') target.sendDev({ kind: 'set_balance', usd: PROBE_START_BALANCE_USD })
+  return live
 }
 
 /** Runs the scenario; the server's settings are restored to defaults however it ends (done, cancelled or thrown). */
@@ -490,11 +499,11 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
   const results: BenchPhaseResult[] = []
   for (const [index, p] of scenario.phases.entries()) {
     deps.onPhase(p, index)
-    applySettings(p, deps.target)
+    const seedApplied = await applySettings(p, deps)
     await deps.sleep(scenario.warmupMs)
     if (deps.isCancelled()) return 'cancelled'
 
-    const result = await measurePhase(p, deps)
+    const result = await measurePhase(p, seedApplied, deps)
     if (result === 'cancelled') return 'cancelled'
     results.push(result)
   }
@@ -502,7 +511,7 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
 }
 
 /** One measured window plus its settle (probe drain, wait for live). Status listener is always removed. */
-async function measurePhase(p: BenchPhase, deps: BenchDeps): Promise<BenchPhaseResult | 'cancelled'> {
+async function measurePhase(p: BenchPhase, seedApplied: boolean, deps: BenchDeps): Promise<BenchPhaseResult | 'cancelled'> {
   const timeline: StatusSample[] = []
   const stopTimeline = deps.target.onStatus((status) => timeline.push({ at: deps.now(), status }))
   try {
@@ -571,6 +580,7 @@ async function measurePhase(p: BenchPhase, deps: BenchDeps): Promise<BenchPhaseR
       dropRate: p.dropRate,
       aggregation: p.aggregation,
       seed: p.seed,
+      seedApplied,
       durationSec: round2(elapsedMs / 1_000),
       windowStartMs: round2(startedAt),
       windowEndMs: round2(endedAt),

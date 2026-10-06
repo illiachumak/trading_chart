@@ -559,6 +559,29 @@ describe('seeded phases', () => {
     expect(fake.commandTimes[resets[1].i]).toBeLessThanOrEqual(starts[2].at - 1_000)
   })
 
+  it('reports seedApplied: true for seeded phases sent while live, false for live phases', async () => {
+    const fake = fakeBench()
+    const results = await runOk([{ ...BASE, durationMs: 2_000 }, { ...BASE, name: 'seeded', durationMs: 2_000, seed: 5 }], fake)
+    expect(results.map((r) => r.seedApplied)).toEqual([false, true])
+  })
+
+  it('waits for live before the reset and skips it (seedApplied=false) when the connection never comes back', async () => {
+    const fake = fakeBench()
+    fake.setStatus('reconnecting')
+    // Live again after 2 s: the reset waits for it instead of being dropped by the transport.
+    setTimeout(() => fake.setStatus('live'), 2_000)
+    const [late] = await runOk([{ ...BASE, durationMs: 2_000, seed: 11 }], fake)
+    expect(late.seedApplied).toBe(true)
+    const resetIndex = fake.commands.findIndex((c) => c.kind === 'reset_market')
+    expect(fake.commandTimes[resetIndex]).toBeGreaterThanOrEqual(1_000_000 + 2_000)
+
+    const down = fakeBench()
+    down.setStatus('reconnecting')
+    const [never] = await runOk([{ ...BASE, durationMs: 2_000, seed: 11 }], down)
+    expect(never.seedApplied).toBe(false)
+    expect(down.commands.some((c) => c.kind === 'reset_market')).toBe(false)
+  })
+
   it('existing scenarios stay live', () => {
     for (const scenario of [QUICK_SCENARIO, MATRIX_SCENARIO, DEEP_SCENARIO, SCALE_SCENARIO]) {
       expect(scenario.phases.every((p) => p.seed === 'live')).toBe(true)
