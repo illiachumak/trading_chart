@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mean, meanCI, sampleSd, tQuantile975, welchDiffCI } from '@/lib/perf/stats'
+import { holmBonferroni, mean, meanCI, sampleSd, tQuantile975, tTwoSidedP, welchDiffCI } from '@/lib/perf/stats'
 
 // Reference values from scipy.stats (t.ppf(0.975, df), sample sd with ddof=1, Welch t-interval).
 
@@ -63,6 +63,7 @@ describe('welchDiffCI', () => {
     expect(d.low).toBeCloseTo(2.3958, 2)
     expect(d.high).toBeCloseTo(9.6042, 2)
     expect(d.significant).toBe(true)
+    expect(d.p).toBeCloseTo(0.0046475, 6)
   })
 
   it('does not flag a change when the interval contains zero', () => {
@@ -73,15 +74,52 @@ describe('welchDiffCI', () => {
     expect(d.low).toBeCloseTo(-1.306, 3)
     expect(d.high).toBeCloseTo(3.306, 3)
     expect(d.significant).toBe(false)
+    expect(d.p).toBeCloseTo(0.3465935, 6)
   })
 
   it('handles zero variance on both sides', () => {
-    expect(welchDiffCI([2, 2, 2], [2, 2])).toEqual({ diff: 0, low: 0, high: 0, df: 3, significant: false })
-    expect(welchDiffCI([2, 2, 2], [3, 3])).toEqual({ diff: 1, low: 1, high: 1, df: 3, significant: true })
+    expect(welchDiffCI([2, 2, 2], [2, 2])).toEqual({ diff: 0, low: 0, high: 0, df: 3, significant: false, p: 1 })
+    expect(welchDiffCI([2, 2, 2], [3, 3])).toEqual({ diff: 1, low: 1, high: 1, df: 3, significant: true, p: 0 })
   })
 
   it('is n/a with fewer than two values on a side', () => {
     expect(welchDiffCI([1], [1, 2, 3])).toBe('n/a')
     expect(welchDiffCI([1, 2], [])).toBe('n/a')
+  })
+})
+
+describe('tTwoSidedP', () => {
+  it('matches the two-sided Student t tail probability for integer and fractional df', () => {
+    expect(tTwoSidedP(2.5, 3.7)).toBeCloseTo(0.0718220, 6)
+    expect(tTwoSidedP(0.3, 1)).toBeCloseTo(0.8144528, 6)
+    expect(tTwoSidedP(4, 2.2)).toBeCloseTo(0.0487306, 6)
+    expect(tTwoSidedP(10, 50)).toBeCloseTo(1.6077e-13, 15)
+  })
+
+  it('is symmetric in t and 1 at t = 0', () => {
+    expect(tTwoSidedP(-2.5, 3.7)).toBeCloseTo(tTwoSidedP(2.5, 3.7), 12)
+    expect(tTwoSidedP(0, 5)).toBe(1)
+  })
+})
+
+describe('holmBonferroni', () => {
+  it('rejects step-down against alpha / (m − rank), keeping the input order', () => {
+    // m = 4, sorted: 0.01 ≤ 0.0125 ✓, 0.015 ≤ 0.0167 ✓, 0.03 > 0.025 ✗ (stop), 0.04 not tested.
+    expect(holmBonferroni([0.04, 0.01, 0.03, 0.015], 0.05)).toEqual([false, true, false, true])
+  })
+
+  it('stops at the first non-rejection even when a later p-value would pass its own threshold', () => {
+    // m = 3: 0.02 > 0.0167 ✗ → nothing rejected although 0.03 ≤ 0.05 / 1.
+    expect(holmBonferroni([0.02, 0.03, 0.03], 0.05)).toEqual([false, false, false])
+  })
+
+  it('is stricter than uncorrected testing but equals it for a single test', () => {
+    expect(holmBonferroni([0.04], 0.05)).toEqual([true])
+    expect(holmBonferroni([0.04, 0.04], 0.05)).toEqual([false, false])
+  })
+
+  it('handles no tests and defaults alpha to 0.05', () => {
+    expect(holmBonferroni([])).toEqual([])
+    expect(holmBonferroni([0.001, 0.2])).toEqual([true, false])
   })
 })
