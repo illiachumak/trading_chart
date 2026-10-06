@@ -1,14 +1,16 @@
 import { useCallback, useState } from 'react'
-import { BATCH_INTERVAL_MS, DEFAULT_TRADES_PER_SEC, STRESS_TRADES_PER_SEC } from '@/config/market'
+import { BATCH_INTERVAL_MS, DEFAULT_AGGREGATION, DEFAULT_TRADES_PER_SEC, STRESS_TRADES_PER_SEC } from '@/config/market'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
-import type { DevCommand } from '@/lib/realtime/protocol'
+import type { AggregationMode, DevCommand } from '@/lib/realtime/protocol'
 
 export type DevControls = {
   rate: number
   latencyMs: number
   dropRatePct: number
   batchIntervalMs: number
+  aggregation: AggregationMode
   setBatchIntervalMs: (value: number) => void
+  setAggregation: (mode: AggregationMode) => void
   setRate: (value: number) => void
   setLatency: (value: number) => void
   setDropRatePct: (value: number) => void
@@ -22,6 +24,7 @@ export function useDevControls(): DevControls {
   const [latencyMs, setLatencyState] = useState(0)
   const [dropRatePct, setDropState] = useState(0)
   const [batchIntervalMs, setBatchState] = useState<number>(BATCH_INTERVAL_MS)
+  const [aggregation, setAggregationState] = useState<AggregationMode>(DEFAULT_AGGREGATION)
 
   const send = useCallback((command: DevCommand) => runtime.send({ type: 'dev', command }), [runtime])
 
@@ -30,9 +33,14 @@ export function useDevControls(): DevControls {
     latencyMs,
     dropRatePct,
     batchIntervalMs,
+    aggregation,
     setBatchIntervalMs: (value: number) => {
       setBatchState(value)
       send({ kind: 'set_batch_interval', ms: value })
+    },
+    setAggregation: (mode: AggregationMode) => {
+      setAggregationState(mode)
+      send({ kind: 'set_aggregation', mode })
     },
     setRate: (value: number) => {
       setRateState(value)
