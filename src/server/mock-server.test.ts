@@ -196,6 +196,14 @@ describe('MockServer', () => {
     expect(snapshot.seq).toBe(1)
   })
 
+  it('answers a resync from an up-to-date client with a fresh heartbeat', () => {
+    const t = setup()
+    t.connect(1)
+    const lastSeq = t.server.getLastSeq()
+    t.send(1, { type: 'resync', fromSeq: lastSeq + 1 })
+    expect(t.messagesFor(1)).toEqual([{ type: 'heartbeat', ts: 0, seq: lastSeq + 1 }])
+  })
+
   it('ignores data for unknown connections and garbage payloads', () => {
     const t = setup()
     t.server.onBridgeMessage({ kind: 'data', connId: 9, data: JSON.stringify({ type: 'resync', fromSeq: 1 }) })
