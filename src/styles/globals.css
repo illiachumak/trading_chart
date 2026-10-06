@@ -28,6 +28,9 @@
   --color-brand-border: #06288e;    /* brand-800 */
   --color-warn: #ec9400;            /* outcome-amber-400 */
   --color-cyan: #00dad9;            /* outcome-cyan-300: chart line */
+  --color-primary-from: #1f78ff;    /* CTA gradient top */
+  --color-primary-to: #005deb;      /* CTA gradient bottom */
+  --color-on-primary: #ffffff;      /* CTA label */
 
   /* Type */
   --font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
@@ -47,6 +50,7 @@
 
   /* Elevation (dark) */
   --shadow-card: inset 0 1px 0 0 #ffffff0d, inset 0 0 0 1px #ffffff05, 0 0 0 1px #0000001f, 0 1px 1px -0.5px #0000002e, 0 3px 3px -1.5px #0000002e;
+  --shadow-primary: inset 0 1px #ffffff59, inset 0 -12px 24px #00286e59, 0 18px 50px -12px #005deb99;
   --shadow-sticky: inset 0 1px 0 0 #ffffff14, inset 0 0 0 1px #ffffff0a, 0 0 0 1px #00000029, 0 1px 1px -0.5px #0000002e, 0 3px 3px -1.5px #0000002e, 0 6px 6px -3px #0000002e, 0 12px 12px -6px #0000002e;
 }
 
@@ -65,6 +69,14 @@
 @utility border-t-hairline {
   border-top-style: solid;
   border-top-width: 0.5px;
+}
+
+/* Hairline separators between list children; pair with divide-border for the color */
+@utility divide-hairline {
+  & > :not(:last-child) {
+    border-bottom-style: solid;
+    border-bottom-width: 0.5px;
+  }
 }
 
 /* Card shell used by every panel */
@@ -99,12 +111,12 @@
   height: 2.5rem;
   padding: 0 1.375rem;
   border-radius: 1rem;
-  color: #fff;
+  color: var(--color-on-primary);
   font-size: var(--text-body);
   font-weight: 500;
   letter-spacing: 0.00625rem;
-  background: linear-gradient(#1f78ff 0%, #005deb 100%);
-  box-shadow: inset 0 1px #ffffff59, inset 0 -12px 24px #00286e59, 0 18px 50px -12px #005deb99;
+  background: linear-gradient(var(--color-primary-from) 0%, var(--color-primary-to) 100%);
+  box-shadow: var(--shadow-primary);
   transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.35s;
 }
 
