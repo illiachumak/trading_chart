@@ -3,11 +3,14 @@
 
 import {
   DEFAULT_TRADES_PER_SEC,
+  BATCH_INTERVAL_MS,
   HEARTBEAT_INTERVAL_MS,
   LMSR_LIQUIDITY,
+  MAX_BATCH_INTERVAL_MS,
   MAX_DROP_RATE,
   MAX_LATENCY_MS,
   MAX_SLIPPAGE,
+  MIN_BATCH_INTERVAL_MS,
   ORDER_RESULT_CACHE_SIZE,
   PRICE_BOUND,
   RECENT_TRADES_LIMIT,
@@ -38,7 +41,12 @@ export type MockServerDeps = {
   schedule: (fn: () => void, ms: number) => void
 }
 
-export type ServerConfig = EngineConfig & { tradesPerSec: number; replayCapacity: number }
+export type ServerConfig = EngineConfig & {
+  tradesPerSec: number
+  replayCapacity: number
+  /** Initial interval between `trades` batches; changeable at runtime via a dev command. */
+  batchIntervalMs: number
+}
 
 export const DEFAULT_SERVER_CONFIG: ServerConfig = {
   liquidity: LMSR_LIQUIDITY,
@@ -51,6 +59,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = {
   orderResultCacheLimit: ORDER_RESULT_CACHE_SIZE,
   tradesPerSec: DEFAULT_TRADES_PER_SEC,
   replayCapacity: REPLAY_BUFFER_SIZE,
+  batchIntervalMs: BATCH_INTERVAL_MS,
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -69,12 +78,14 @@ export class MockServer {
   private readonly faultRng: Rng
   private latencyMs = 0
   private dropRate = 0
+  private batchIntervalMs: number
   private lastPublishAt: number
   /** Per-connection FIFO of delayed messages; drained by a single timer per connection. */
   private readonly pending = new Map<number, PendingDelivery[]>()
 
   constructor(deps: MockServerDeps, config: ServerConfig) {
     this.deps = deps
+    this.batchIntervalMs = config.batchIntervalMs
     this.faultRng = createRng(Math.floor(deps.rng() * 4_294_967_296))
     const now = deps.now()
     this.engine = new MarketEngine(
@@ -117,7 +128,12 @@ export class MockServer {
     }
   }
 
-  /** Called every BATCH_INTERVAL_MS: generate mock arrivals, execute due events, broadcast. */
+  /** Current delay between `tick()` calls; the host loop re-reads it after every tick. */
+  getBatchIntervalMs(): number {
+    return this.batchIntervalMs
+  }
+
+  /** Called every `getBatchIntervalMs()`: generate mock arrivals, execute due events, broadcast. */
   tick(): void {
     const now = this.deps.now()
     for (const arrival of this.arrivals.generate(now)) this.engine.enqueueMock(arrival.ts, arrival.shares)
@@ -177,6 +193,9 @@ export class MockServer {
         return
       case 'set_drop_rate':
         this.dropRate = clamp(command.rate, 0, MAX_DROP_RATE)
+        return
+      case 'set_batch_interval':
+        this.batchIntervalMs = clamp(command.ms, MIN_BATCH_INTERVAL_MS, MAX_BATCH_INTERVAL_MS)
         return
       case 'force_disconnect':
         for (const connId of this.connections) this.deps.post({ kind: 'closed', connId })

@@ -67,6 +67,7 @@ export type DevCommand =
   | { kind: 'set_rate'; tradesPerSec: number }
   | { kind: 'set_latency'; ms: number }
   | { kind: 'set_drop_rate'; rate: number }
+  | { kind: 'set_batch_interval'; ms: number }
   | { kind: 'force_disconnect' }
 
 export type PlaceOrder = {
@@ -158,6 +159,8 @@ function isDevCommand(value: unknown): value is DevCommand {
       return isNumber(value.ms)
     case 'set_drop_rate':
       return isNumber(value.rate)
+    case 'set_batch_interval':
+      return typeof value.ms === 'number' && Number.isFinite(value.ms)
     case 'force_disconnect':
       return true
     default:

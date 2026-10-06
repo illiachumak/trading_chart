@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { BATCH_INTERVAL_MS, MAX_BATCH_INTERVAL_MS, MIN_BATCH_INTERVAL_MS } from '@/config/market'
 import type { WorkerToMain } from '@/lib/realtime/bridge'
 import { type ClientMessage, parseServerMessage, type ServerMessage } from '@/lib/realtime/protocol'
 import { DEFAULT_SERVER_CONFIG, MockServer, type ServerConfig } from '@/server/mock-server'
@@ -67,6 +68,20 @@ function setup(overrides: Partial<ServerConfig> = {}, timerJitterMs = 0) {
 }
 
 describe('MockServer', () => {
+  it('reports the configured batch interval and clamps dev changes to the allowed range', () => {
+    const t = setup()
+    expect(t.server.getBatchIntervalMs()).toBe(BATCH_INTERVAL_MS)
+    t.connect(1)
+    const setMs = (ms: number) => t.send(1, { type: 'dev', command: { kind: 'set_batch_interval', ms } })
+    setMs(33)
+    expect(t.server.getBatchIntervalMs()).toBe(33)
+    setMs(1)
+    expect(t.server.getBatchIntervalMs()).toBe(MIN_BATCH_INTERVAL_MS)
+    setMs(60_000)
+    expect(t.server.getBatchIntervalMs()).toBe(MAX_BATCH_INTERVAL_MS)
+    expect(setup({ batchIntervalMs: 50 }).server.getBatchIntervalMs()).toBe(50)
+  })
+
   it('acknowledges a connection', () => {
     const t = setup()
     t.connect(1)

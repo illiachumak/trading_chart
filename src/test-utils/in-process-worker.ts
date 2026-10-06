@@ -1,7 +1,7 @@
 // Test-only: runs MockServer in-process behind a Worker-shaped object.
 // Messages cross with structuredClone + queueMicrotask, like a real worker boundary.
 
-import { BATCH_INTERVAL_MS, HEARTBEAT_INTERVAL_MS } from '@/config/market'
+import { HEARTBEAT_INTERVAL_MS } from '@/config/market'
 import type { WorkerHandle, WorkerMessageListener } from '@/lib/realtime/mock-socket'
 import { MockServer, type ServerConfig } from '@/server/mock-server'
 import { createRng } from '@/server/rng'
@@ -27,10 +27,15 @@ export function createInProcessWorker(
     },
     config,
   )
-  const tick = setInterval(() => server.tick(), BATCH_INTERVAL_MS)
+  let tickTimer: ReturnType<typeof setTimeout> | undefined
+  const loop = (): void => {
+    server.tick()
+    tickTimer = setTimeout(loop, server.getBatchIntervalMs())
+  }
+  tickTimer = setTimeout(loop, server.getBatchIntervalMs())
   const heartbeat = setInterval(() => server.heartbeat(), HEARTBEAT_INTERVAL_MS)
   const pause = (): void => {
-    clearInterval(tick)
+    clearTimeout(tickTimer)
     clearInterval(heartbeat)
   }
   const worker: WorkerHandle = {

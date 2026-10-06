@@ -48,6 +48,14 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage(JSON.stringify({ type: 'resync', fromSeq: 1.5 }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ type: 'dev' }))).toBe('invalid')
     expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_latency' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_batch_interval' } }))).toBe('invalid')
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_batch_interval', ms: '33' } }))).toBe(
+      'invalid',
+    )
+    expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'set_batch_interval', ms: 33 } }))).toEqual({
+      type: 'dev',
+      command: { kind: 'set_batch_interval', ms: 33 },
+    })
     expect(parseClientMessage(JSON.stringify({ type: 'dev', command: { kind: 'force_disconnect' } }))).toEqual({
       type: 'dev',
       command: { kind: 'force_disconnect' },
