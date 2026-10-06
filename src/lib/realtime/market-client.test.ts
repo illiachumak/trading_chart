@@ -121,6 +121,23 @@ describe('MarketClient', () => {
     expect(client.getLastSeq()).toBe(12)
   })
 
+  it('counts received bytes (every raw message) and trades including aggregated ones', () => {
+    const { fake, client, goLive } = setup()
+    goLive(10)
+    const socket = fake.latest()
+    const trade = { id: 1, ts: 0, side: 'yes', shares: 5, priceAfter: 0.5, source: 'mock' } as const
+    const compact = json({ type: 'trades', seq: 11, ts: 0, items: [trade, { ...trade, id: 9 }], aggregated: { count: 7, volumeShares: 70 } })
+    const full = json({ type: 'trades', seq: 12, ts: 0, items: [{ ...trade, id: 10 }], aggregated: 'none' })
+    const before = client.stats.bytes
+    socket.handlers.onMessage(compact)
+    socket.handlers.onMessage(full)
+    socket.handlers.onMessage(full) // duplicate: still bytes on the wire
+    socket.handlers.onMessage('garbage')
+    expect(client.stats.bytes - before).toBe(compact.length + 2 * full.length + 'garbage'.length)
+    expect(client.stats.trades).toBe(2 + 7 + 1)
+    expect(client.stats.tradeItems).toBe(3)
+  })
+
   it('buffers messages that arrive before the snapshot', () => {
     const { fake, client, seen } = setup()
     client.start()

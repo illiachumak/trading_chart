@@ -14,7 +14,12 @@ export type ConnectionStatus = 'idle' | 'connecting' | 'resyncing' | 'live' | 'r
 
 export type ClientStats = {
   messages: number
+  /** Trades the server reported: shipped items plus those summarised in `aggregated`. */
   trades: number
+  /** Trades actually shipped as `items` (equals `trades` in full aggregation mode). */
+  tradeItems: number
+  /** Sum of raw message string lengths, including duplicates and unparsable data (~bytes for ASCII JSON). */
+  bytes: number
   gaps: number
   resyncs: number
   duplicates: number
@@ -35,7 +40,16 @@ type Timer = ReturnType<typeof setTimeout>
 type SnapshotMessage = Extract<ServerMessage, { type: 'snapshot' }>
 
 export class MarketClient {
-  readonly stats: ClientStats = { messages: 0, trades: 0, gaps: 0, resyncs: 0, duplicates: 0, reconnects: 0 }
+  readonly stats: ClientStats = {
+    messages: 0,
+    trades: 0,
+    tradeItems: 0,
+    bytes: 0,
+    gaps: 0,
+    resyncs: 0,
+    duplicates: 0,
+    reconnects: 0,
+  }
   private readonly options: MarketClientOptions
   private status: ConnectionStatus = 'idle'
   private socket: Socket | 'none' = 'none'
@@ -184,6 +198,7 @@ export class MarketClient {
   }
 
   private handleData(data: string): void {
+    this.stats.bytes += data.length
     const message = parseServerMessage(data)
     if (message === 'invalid') return
     this.stats.messages++
@@ -254,7 +269,10 @@ export class MarketClient {
 
   private apply(message: ServerMessage): void {
     this.lastSeq = message.seq
-    if (message.type === 'trades') this.stats.trades += message.items.length
+    if (message.type === 'trades') {
+      this.stats.tradeItems += message.items.length
+      this.stats.trades += message.items.length + (message.aggregated === 'none' ? 0 : message.aggregated.count)
+    }
     if (message.type === 'order_result') this.inflight.delete(message.result.clientOrderId)
     this.deliver(message)
   }
