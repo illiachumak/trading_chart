@@ -4,6 +4,7 @@ import { RoundHistory } from '@/components/features/round/round-history'
 import { RoundHeader } from '@/components/features/round/round-header'
 import { TradesFeed } from '@/components/features/trades-feed/trades-feed'
 import { TradePanel } from '@/components/features/trade-panel/trade-panel'
+import { ErrorBoundary } from '@/components/common/error-boundary'
 import { FeatureBoundary } from '@/components/common/feature-boundary'
 import { Header } from '@/components/layout/header'
 
@@ -13,34 +14,34 @@ export function AppShell() {
       <FeatureBoundary id="header">
         <Header />
       </FeatureBoundary>
-      <main className="mx-auto grid w-full max-w-7xl flex-1 grid-cols-1 gap-4 px-4 py-4 md:px-8 md:py-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <section className="card flex flex-col gap-4 p-4 md:p-5">
-            <FeatureBoundary id="round-header">
-              <RoundHeader />
-            </FeatureBoundary>
-            <div className="dot-grid overflow-hidden rounded-control">
-              <FeatureBoundary id="chart">
-                <PriceChart />
-              </FeatureBoundary>
-            </div>
-          </section>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <FeatureBoundary id="trades-feed">
-              <TradesFeed />
-            </FeatureBoundary>
-            <FeatureBoundary id="round-history">
-              <RoundHistory />
+      <main className="mx-auto grid w-full max-w-7xl flex-1 grid-cols-1 gap-4 px-4 py-4 md:px-8 md:py-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr]">
+        <section className="card flex min-w-0 flex-col gap-4 p-4 md:p-5 lg:col-start-1 lg:row-start-1">
+          <FeatureBoundary id="round-header">
+            <RoundHeader />
+          </FeatureBoundary>
+          <div className="dot-grid overflow-hidden rounded-control">
+            <FeatureBoundary id="chart">
+              <PriceChart />
             </FeatureBoundary>
           </div>
-        </div>
-        <aside className="flex flex-col gap-4">
+        </section>
+        <aside className="flex flex-col gap-4 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <FeatureBoundary id="trade-panel">
             <TradePanel />
           </FeatureBoundary>
         </aside>
+        <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 lg:col-start-1 lg:row-start-2">
+          <FeatureBoundary id="trades-feed">
+            <TradesFeed />
+          </FeatureBoundary>
+          <FeatureBoundary id="round-history">
+            <RoundHistory />
+          </FeatureBoundary>
+        </div>
       </main>
-      <DevPanel />
+      <ErrorBoundary name="dev-tools">
+        <DevPanel />
+      </ErrorBoundary>
     </div>
   )
 }
