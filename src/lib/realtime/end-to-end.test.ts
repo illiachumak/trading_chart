@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AccountStore } from '@/lib/realtime/account-store'
 import { ChartFeeder } from '@/lib/realtime/chart-feeder'
 import { MarketClient } from '@/lib/realtime/market-client'
 import { createWorkerSocketFactory } from '@/lib/realtime/mock-socket'
-import type { DevCommand } from '@/lib/realtime/protocol'
+import type { DevCommand, Trade } from '@/lib/realtime/protocol'
 import { DEFAULT_SERVER_CONFIG } from '@/server/mock-server'
 import { createInProcessWorker } from '@/test-utils/in-process-worker'
 
@@ -41,6 +42,13 @@ describe('client + mock server end to end', () => {
     client.onMessage((message) => feeder.handle(message))
     const seqs: number[] = []
     client.onMessage((message) => seqs.push(message.seq))
+    const account = new AccountStore()
+    account.attach(client)
+    const userTrades: Trade[] = []
+    client.onMessage((message) => {
+      if (message.type !== 'trades') return
+      for (const trade of message.items) if (trade.source === 'user') userTrades.push(trade)
+    })
     const dev = (command: DevCommand) => client.send({ type: 'dev', command })
 
     client.start()
@@ -49,6 +57,17 @@ describe('client + mock server end to end', () => {
     dev({ kind: 'set_drop_rate', rate: 0.2 })
     await vi.advanceTimersByTimeAsync(20_000)
     expect(client.getStatus()).toBe('live')
+    // Place an order right before the first disconnect; it must be applied exactly once.
+    account.markPending('e2e-order')
+    client.send({
+      type: 'place_order',
+      clientOrderId: 'e2e-order',
+      roundId: 1,
+      side: 'yes',
+      amountUsd: 10,
+      expectedPrice: 0.99,
+      maxSlippage: 0.5,
+    })
     dev({ kind: 'force_disconnect' })
     await vi.advanceTimersByTimeAsync(3_000)
     expect(client.getStatus()).toBe('live')
@@ -68,6 +87,11 @@ describe('client + mock server end to end', () => {
     expect(midTruth.round.id).toBe(1)
     expect(midTruth.history.length).toBeGreaterThan(30)
     expect(feeder.getHistory()).toEqual(midTruth.history)
+    expect(account.store.getState().account).toEqual(midTruth.account)
+    expect(userTrades.filter((t) => t.clientOrderId === 'e2e-order')).toHaveLength(1)
+    const order = account.store.getState().order
+    expect(order.kind).toBe('done')
+    if (order.kind === 'done') expect(order.result.status).toBe('filled')
     await vi.advanceTimersByTimeAsync(18_950) // crosses the 60 s round boundary
     pause()
     await vi.advanceTimersByTimeAsync(2_000)
