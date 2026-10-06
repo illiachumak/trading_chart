@@ -55,6 +55,12 @@
   border-width: 0.5px;
 }
 
+/* Bottom-only hairline (border-hairline sets all four sides) */
+@utility border-b-hairline {
+  border-bottom-style: solid;
+  border-bottom-width: 0.5px;
+}
+
 /* Card shell used by every panel */
 @utility card {
   border-radius: var(--radius-card);

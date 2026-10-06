@@ -3,8 +3,7 @@ import { ModeTabs } from '@/components/layout/mode-tabs'
 
 export function Header() {
   return (
-    // Hairline only on the bottom edge: `border-hairline` would set all four sides.
-    <header className="sticky top-0 z-10 border-b-[0.5px] border-border bg-canvas/80 backdrop-blur">
+    <header className="sticky top-0 z-10 border-b-hairline border-border bg-canvas/80 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-8">
         <div className="flex items-baseline gap-3">
           <h1 className="text-heading">Coinflip</h1>

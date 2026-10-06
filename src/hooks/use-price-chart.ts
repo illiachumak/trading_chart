@@ -89,7 +89,7 @@ export function usePriceChart(container: RefObject<HTMLDivElement | null>): void
       lineWidth: 1,
       lineStyle: LineStyle.Dotted,
       axisLabelVisible: true,
-      title: '50%',
+      title: '',
     })
     const markers = createSeriesMarkers(series, [])
 
