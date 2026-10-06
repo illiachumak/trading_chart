@@ -24,7 +24,9 @@ export function useQuoteRequests(
 
   useEffect(() => {
     if (amount === 'invalid') return
-    // AccountStore assigns requestIds and shows only the answer to the latest request.
+    // AccountStore assigns increasing requestIds and applies an answer only when lastApplied < id ≤ latest:
+    // stale answers (older than the one shown) are dropped, but an older-than-latest answer still shows while
+    // the newest is in flight, so quotes never starve when RTT exceeds the refresh interval.
     const request = (): void => {
       if (shouldRefreshQuote({ hidden: document.hidden, orderPending: orderPendingRef.current })) {
         runtime.account.requestQuote(side, amount, maxSlippage)
