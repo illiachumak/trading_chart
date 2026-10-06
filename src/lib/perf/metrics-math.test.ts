@@ -3,38 +3,30 @@ import {
   estimateDisplayHz,
   groupInteractions,
   pctOverBudget,
-  percentile,
   percentileOfSorted,
   recoveryTimes,
   summarizeInteractions,
 } from '@/lib/perf/metrics-math'
 
-describe('percentile', () => {
-  it('uses nearest rank and does not mutate the input', () => {
-    const values = [5, 1, 4, 2, 3]
-    expect(percentile(values, 0.5)).toBe(3)
-    expect(percentile(values, 0.99)).toBe(5)
-    expect(percentile(values, 0)).toBe(1)
-    expect(values).toEqual([5, 1, 4, 2, 3])
-  })
-
+describe('percentileOfSorted', () => {
   it('p50/p95/p99 over 1..100', () => {
     const sorted = Array.from({ length: 100 }, (_, i) => i + 1)
     expect([0.5, 0.95, 0.99].map((p) => percentileOfSorted(sorted, p))).toEqual([50, 95, 99])
   })
 
   it('is 0 when empty', () => {
-    expect(percentile([], 0.95)).toBe(0)
+    expect(percentileOfSorted([], 0.95)).toBe(0)
   })
 })
 
 describe('pctOverBudget', () => {
-  it('counts frames strictly over the budget', () => {
-    expect(pctOverBudget([16.6, 16.7, 16.8, 33.4], 16.7)).toBe(50)
+  it('counts frames strictly over the threshold; vsync jitter is not a miss', () => {
+    expect(pctOverBudget([16.6, 16.9, 24, 33.4], 25.05)).toBe(25)
+    expect(pctOverBudget([25.05, 25.06], 25.05)).toBe(50)
   })
 
   it('is 0 without frames', () => {
-    expect(pctOverBudget([], 16.7)).toBe(0)
+    expect(pctOverBudget([], 25.05)).toBe(0)
   })
 })
 
@@ -105,6 +97,18 @@ describe('recoveryTimes', () => {
         { at: 900, status: 'reconnecting' },
       ]),
     ).toEqual({ recoveredMs: [300], unrecovered: 1 })
+  })
+
+  it('ignores outages that start after the window end but counts recoveries after it', () => {
+    const timeline = [
+      { at: 0, status: 'live' as const },
+      { at: 900, status: 'reconnecting' as const },
+      { at: 1_100, status: 'live' as const },
+      { at: 1_200, status: 'reconnecting' as const },
+      { at: 1_500, status: 'live' as const },
+    ]
+    expect(recoveryTimes(timeline, 1_000)).toEqual({ recoveredMs: [200], unrecovered: 0 })
+    expect(recoveryTimes(timeline.slice(0, 4), 1_000)).toEqual({ recoveredMs: [200], unrecovered: 0 })
   })
 
   it('no outages → nothing recovered', () => {

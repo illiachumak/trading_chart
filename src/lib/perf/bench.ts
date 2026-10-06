@@ -141,7 +141,7 @@ export type BenchPhaseResult = {
   frameP50Ms: number
   frameP95Ms: number
   frameP99Ms: number
-  /** % of frames longer than the 16.7 ms (60 Hz) budget. */
+  /** % of frames longer than FRAME_MISS_THRESHOLD_MS (1.5 x the 60 Hz budget, ~25 ms). */
   pctFramesOverBudget: number
   displayHz: number | 'n/a'
   flushP50Ms: number
@@ -556,7 +556,7 @@ async function measurePhase(p: BenchPhase, deps: BenchDeps): Promise<BenchPhaseR
     const endedLive = await waitForLive(deps)
     if (deps.isCancelled()) return 'cancelled'
     // Outages that started in the window and recovered while settling still count.
-    const recovery = recoveryTimes(timeline)
+    const recovery = recoveryTimes(timeline, endedAt)
     // Dev commands are dropped while disconnected, so the reset goes out once live again.
     deps.target.sendDev({ kind: 'set_latency', ms: 0 })
     deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })

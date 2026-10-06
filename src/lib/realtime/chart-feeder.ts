@@ -105,6 +105,7 @@ export class ChartFeeder {
     const mode = fresh.length > this.options.backlogThreshold ? 'setData' : 'update'
     if (mode === 'setData') this.sink.setData(this.history)
     else for (const point of fresh) this.sink.update(point)
+    // dataAgeMs counts the oldest drained tick even if its point was dropped above as stale.
     this.options.onFlush({
       mode,
       durationMs: this.options.perfNow() - startedAt,

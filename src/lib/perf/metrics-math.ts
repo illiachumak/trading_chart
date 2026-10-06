@@ -9,11 +9,6 @@ export function percentileOfSorted(sorted: readonly number[], p: number): number
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))]
 }
 
-/** Nearest-rank percentile of unsorted values; 0 when empty. */
-export function percentile(values: readonly number[], p: number): number {
-  return percentileOfSorted([...values].sort((a, b) => a - b), p)
-}
-
 /** Share of frames longer than the budget, in percent (0–100); 0 when there are no frames. */
 export function pctOverBudget(frameMs: readonly number[], budgetMs: number): number {
   if (frameMs.length === 0) return 0
@@ -80,16 +75,17 @@ export type RecoveryTimeline = {
 /**
  * Recovery times from a client status timeline (first sample = status at the start).
  * An outage starts when the status leaves `live` (or at the first sample if it is not live)
- * and ends at the next `live`.
+ * and ends at the next `live`. Outages that start after `startedByMs` are ignored (they belong to
+ * the next window); recoveries after it still count.
  */
-export function recoveryTimes(timeline: readonly StatusSample[]): RecoveryTimeline {
+export function recoveryTimes(timeline: readonly StatusSample[], startedByMs = Number.POSITIVE_INFINITY): RecoveryTimeline {
   const recoveredMs: number[] = []
   let downSince: number | 'up' = 'up'
   for (const { at, status } of timeline) {
     if (status === 'live') {
       if (downSince !== 'up') recoveredMs.push(at - downSince)
       downSince = 'up'
-    } else if (downSince === 'up') {
+    } else if (downSince === 'up' && at <= startedByMs) {
       downSince = at
     }
   }

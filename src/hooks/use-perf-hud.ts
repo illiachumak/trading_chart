@@ -2,7 +2,7 @@
 // so the HUD itself causes zero React commits.
 
 import { useEffect } from 'react'
-import { FRAME_BUDGET_MS, HUD_REFRESH_MS } from '@/config/market'
+import { FRAME_MISS_THRESHOLD_MS, HUD_REFRESH_MS } from '@/config/market'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
 import { browserSamplingEnv, perfMetrics } from '@/lib/perf/perf-metrics'
 import { type CountSample, ratesPerSecond, trailingPerMinute } from '@/lib/perf/rates'
@@ -49,7 +49,7 @@ export function usePerfHud(write: (field: HudField, text: string) => void): void
 
       const loafPerMin = trailingPerMinute(loafSamples, { at: now, total: snap.totals.longAnimationFrames }, LOAF_RATE_WINDOW_MS)
 
-      write('frame', `${snap.frameP95.toFixed(1)} ms · ${snap.pctFramesOverBudget.toFixed(1)}% >${FRAME_BUDGET_MS}`)
+      write('frame', `${snap.frameP95.toFixed(1)} ms · ${snap.pctFramesOverBudget.toFixed(1)}% >${Math.round(FRAME_MISS_THRESHOLD_MS)}ms`)
       write('display', `${snap.displayHz === 'n/a' ? '—' : `${snap.displayHz} Hz`} · ${snap.fps} fps`)
       write('loaf', snap.loafSupported ? `${loafPerMin.toFixed(1)}/min` : 'n/a')
       write('flush', `${snap.flushP50.toFixed(2)} / ${snap.flushP95.toFixed(2)} / ${snap.flushMax.toFixed(2)} ms`)

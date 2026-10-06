@@ -136,7 +136,7 @@ describe('PerfMetrics', () => {
     expect(metrics.snapshot().totals.longTaskMaxMs).toBe(300)
   })
 
-  it('frame percentiles, % over the 16.7 ms budget and display Hz', () => {
+  it('frame percentiles, % over the ~25 ms miss threshold and display Hz', () => {
     const metrics = new PerfMetrics(1_000)
     // 90 frames at 60 Hz, 8 dropped frames (33.3 ms), 2 long ones.
     for (let i = 0; i < 90; i++) metrics.recordFrame(16.67)

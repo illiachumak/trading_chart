@@ -1,6 +1,5 @@
 // Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix|deep|scale`.
 // `&cpu=<label>` (e.g. `4x`) is stored in each result's environment as metadata only; nothing is throttled.
-// `&cpu=<label>` (e.g. `4x`) is stored in each result's environment as metadata only; nothing is throttled.
 // Harness hooks: `<html data-bench-phase>` is the phase name only inside the measured window,
 // `warmup:<name>` before it, `settle` after it and `done` at the end, so an external CDP sampler can
 // align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.

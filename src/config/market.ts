@@ -41,8 +41,10 @@ export const RESYNC_TIMEOUT_MS = 1_000
 export const MAX_PENDING_MESSAGES = 5_000
 export const CLOCK_SYNC_WINDOW = 20
 export const PERF_SAMPLE_CAPACITY = 4_000
-/** Frame budget at 60 Hz; frames longer than this count towards pctFramesOverBudget. */
+/** Frame budget at 60 Hz (one vsync interval). */
 export const FRAME_BUDGET_MS = 16.7
+/** A frame counts as over budget past 1.5 vsyncs (~25 ms): a strict > 16.7 would count normal vsync jitter. */
+export const FRAME_MISS_THRESHOLD_MS = FRAME_BUDGET_MS * 1.5
 /** Event Timing reports only events at least this long (16 ms is the API minimum). */
 export const INP_DURATION_THRESHOLD_MS = 16
 

@@ -1,7 +1,7 @@
 // Collectors for the perf HUD and the benchmark. Percentiles are over a rolling window;
 // totals are cumulative so several readers can compute their own rates from deltas.
 
-import { FRAME_BUDGET_MS, INP_DURATION_THRESHOLD_MS, PERF_SAMPLE_CAPACITY } from '@/config/market'
+import { FRAME_MISS_THRESHOLD_MS, INP_DURATION_THRESHOLD_MS, PERF_SAMPLE_CAPACITY } from '@/config/market'
 import {
   type EventTimingSample,
   type InteractionSummary,
@@ -32,7 +32,7 @@ export type PerfSnapshot = {
   frameP50: number
   frameP95: number
   frameP99: number
-  /** Share of frames longer than FRAME_BUDGET_MS (60 Hz budget), in percent. */
+  /** Share of frames longer than FRAME_MISS_THRESHOLD_MS (1.5 x the 60 Hz budget, ~25 ms), in percent. */
   pctFramesOverBudget: number
   /** Refresh rate estimated from the median rAF delta; 'n/a' before any frame. */
   displayHz: number | 'n/a'
@@ -155,7 +155,7 @@ export class PerfMetrics {
       frameP50,
       frameP95: percentileOfSorted(frames, 0.95),
       frameP99: percentileOfSorted(frames, 0.99),
-      pctFramesOverBudget: pctOverBudget(frames, FRAME_BUDGET_MS),
+      pctFramesOverBudget: pctOverBudget(frames, FRAME_MISS_THRESHOLD_MS),
       displayHz: estimateDisplayHz(frameP50),
       flushP50: this.flush.percentile(0.5),
       flushP95: this.flush.percentile(0.95),
