@@ -24,15 +24,16 @@ export function PerfHud() {
 
   return (
     <aside
-      className="card fixed top-16 right-4 z-50 w-96 p-3 font-mono text-caption shadow-sticky"
+      // Left gutter: 18rem fits beside the centered max-w-7xl content on wide screens.
+      className="card fixed top-16 left-4 z-50 w-72 p-3 font-mono text-caption shadow-sticky"
       data-testid="perf-hud"
     >
-      <dl className="grid grid-cols-[8rem_1fr] gap-x-2 gap-y-1">
+      <dl className="grid grid-cols-[6.5rem_1fr] gap-x-2 gap-y-1">
         {ROWS.map(({ field, label }) => (
           <div key={field} className="contents">
             <dt className="text-muted">{label}</dt>
             <dd
-              className="tabular-nums"
+              className="tabular-nums break-words"
               ref={(element) => {
                 if (element !== null) cells.current.set(field, element)
               }}
