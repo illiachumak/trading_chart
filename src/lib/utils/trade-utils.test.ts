@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { OrderResult } from '@/lib/realtime/protocol'
 import { describeOrderResult } from '@/lib/utils/describe-order-result'
-import { parseAmount } from '@/lib/utils/parse-amount'
+import { isAmountInProgress, parseAmount } from '@/lib/utils/parse-amount'
 
 describe('parseAmount', () => {
   it('accepts plain dollar amounts', () => {
@@ -13,6 +13,18 @@ describe('parseAmount', () => {
 
   it.each(['', '0', '0.00', 'abc', '-5', '1e3', '10.123', '12.', '10000000', '1,000'])('rejects %j', (input) => {
     expect(parseAmount(input)).toBe('invalid')
+  })
+})
+
+describe('isAmountInProgress', () => {
+  it('treats a number with a trailing dot as mid-typing', () => {
+    expect(isAmountInProgress('12.')).toBe(true)
+    expect(isAmountInProgress(' 7. ')).toBe(true)
+    expect(parseAmount('12.')).toBe('invalid')
+  })
+
+  it.each(['', '.', '12', '12.5', 'abc.', '12..', '-1.', '12345678.'])('is false for %j', (input) => {
+    expect(isAmountInProgress(input)).toBe(false)
   })
 })
 
@@ -43,7 +55,7 @@ describe('describeOrderResult', () => {
     expect(new Set(texts).size).toBe(reasons.length)
     expect(describeOrderResult(reject('slippage'))).toEqual({
       tone: 'warn',
-      text: 'Price moved to 62.0¢ before your order filled — not executed',
+      text: 'YES price moved to 62.0¢ before your order filled — not executed',
     })
     expect(describeOrderResult(reject('round_closed')).text).toBe('Round closed before your order arrived')
   })
