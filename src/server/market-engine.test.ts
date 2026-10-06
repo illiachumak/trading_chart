@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { PlaceOrder, ServerPayload } from '@/lib/realtime/protocol'
+import type { PlaceOrder, ServerPayload, Side } from '@/lib/realtime/protocol'
 import { type EngineConfig, MarketEngine } from '@/server/market-engine'
 import type { MockTraderModel } from '@/server/mock-traders'
 import type { Resolver } from '@/server/resolvers/types'
@@ -117,9 +117,47 @@ describe('MarketEngine', () => {
     const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
     if (quote.status !== 'ok') throw new Error('quote unavailable')
     engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
-    engine.enqueueMock(999, 60) // moves the average by roughly 1-2 cents
+    engine.enqueueMock(999, 150) // moves the average by roughly 1-2 cents
     const [{ result }] = ofType(engine.advance(1_000), 'order_result')
-    expect(result.status).toBe('filled')
+    if (result.status !== 'filled') throw new Error(`expected fill, got ${result.status}`)
+    const move = result.avgPrice - quote.avgPrice
+    expect(move).toBeGreaterThan(0.006)
+    expect(move).toBeLessThanOrEqual(0.03)
+  })
+
+  it('tolerance is absolute, not relative: fills near 20c where 3% of the price would be 0.6c', () => {
+    const mockSide: { current: Side } = { current: 'no' }
+    const engine = new MarketEngine(
+      CONFIG,
+      { rng: createRng(1), resolver: YES_WINS, traders: { pickSide: () => mockSide.current } },
+      0,
+    )
+    engine.enqueueMock(10, 4_000) // NO flow drives YES down to roughly 20c
+    engine.advance(10)
+    expect(engine.getPrice()).toBeLessThan(0.25)
+    mockSide.current = 'yes'
+    const quote = engine.quote(20, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    expect(quote.avgPrice).toBeLessThan(0.25)
+    engine.enqueueOrder(1_000, order({ expectedPrice: quote.avgPrice, maxSlippage: 0.03 }))
+    engine.enqueueMock(999, 250) // YES flow lifts the average by roughly 1-2 cents
+    const [{ result }] = ofType(engine.advance(1_000), 'order_result')
+    if (result.status !== 'filled') throw new Error(`expected fill, got ${result.status}`)
+    const move = result.avgPrice - quote.avgPrice
+    expect(move).toBeGreaterThan(quote.avgPrice * 0.03) // a relative 3% tolerance would reject
+    expect(move).toBeGreaterThan(0.006)
+    expect(move).toBeLessThanOrEqual(0.03)
+  })
+
+  it('fills at exactly expected + tolerance and accepts the maxSlippage cap', () => {
+    const engine = makeEngine()
+    const quote = engine.quote(0, { type: 'quote', requestId: 1, side: 'yes', amountUsd: 100 }).quote
+    if (quote.status !== 'ok') throw new Error('quote unavailable')
+    // The server fills at the quoted average, so expectedPrice = avg - tolerance sits exactly on the boundary.
+    engine.enqueueOrder(10, order({ clientOrderId: 'edge', expectedPrice: quote.avgPrice - 0.03, maxSlippage: 0.03 }))
+    engine.enqueueOrder(11, order({ clientOrderId: 'cap', amountUsd: 10, expectedPrice: 0.9, maxSlippage: 0.1 }))
+    const results = ofType(engine.advance(11), 'order_result').map((r) => r.result.status)
+    expect(results).toEqual(['filled', 'filled'])
   })
 
   it('rejects with slippage when the price moved by more than the tolerance', () => {
