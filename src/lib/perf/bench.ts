@@ -385,7 +385,7 @@ const LIVE_TIMEOUT_MS = 5_000
 const BYTES_PER_KB = 1_024
 const BYTES_PER_MB = 1_048_576
 
-function round2(value: number): number {
+export function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
@@ -454,7 +454,10 @@ function serverTickWindow(
   }
 }
 
-async function waitForLive(deps: Pick<BenchDeps, 'target' | 'sleep'>): Promise<boolean> {
+/** What the settings/wait-for-live helpers need; the soak runner shares them. */
+export type SettingsDeps = { target: Pick<BenchTarget, 'sendDev' | 'status'>; sleep(ms: number): Promise<void> }
+
+export async function waitForLive(deps: SettingsDeps): Promise<boolean> {
   for (let waited = 0; waited < LIVE_TIMEOUT_MS; waited += LIVE_POLL_MS) {
     if (deps.target.status() === 'live') return true
     await deps.sleep(LIVE_POLL_MS)
@@ -545,7 +548,10 @@ async function runProbe(config: ProbeConfig, deps: BenchDeps, shouldStop: () => 
  * Seeded phases first wait for live: the transport drops dev commands while disconnected, so a
  * reset sent then would silently leave the previous market running. Resolves whether the seed was applied.
  */
-async function applySettings(p: BenchPhase, deps: Pick<BenchDeps, 'target' | 'sleep'>): Promise<boolean> {
+export async function applySettings(
+  p: Pick<BenchPhase, 'tradesPerSec' | 'batchMs' | 'latencyMs' | 'dropRate' | 'aggregation' | 'seed' | 'probe'>,
+  deps: SettingsDeps,
+): Promise<boolean> {
   const { target } = deps
   const live = p.seed !== 'live' && (await waitForLive(deps))
   target.sendDev({ kind: 'set_rate', tradesPerSec: p.tradesPerSec })
@@ -566,12 +572,17 @@ export async function runBench(scenario: BenchScenario, deps: BenchDeps): Promis
   try {
     return await runPhases(scenario, deps)
   } finally {
-    deps.target.sendDev({ kind: 'set_rate', tradesPerSec: DEFAULT_TRADES_PER_SEC })
-    deps.target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
-    deps.target.sendDev({ kind: 'set_latency', ms: 0 })
-    deps.target.sendDev({ kind: 'set_drop_rate', rate: 0 })
-    deps.target.sendDev({ kind: 'set_aggregation', mode: DEFAULT_AGGREGATION })
+    restoreDefaults(deps.target)
   }
+}
+
+/** Puts the server back at the default rate/batch/latency/drop/aggregation. */
+export function restoreDefaults(target: Pick<BenchTarget, 'sendDev'>): void {
+  target.sendDev({ kind: 'set_rate', tradesPerSec: DEFAULT_TRADES_PER_SEC })
+  target.sendDev({ kind: 'set_batch_interval', ms: BATCH_INTERVAL_MS })
+  target.sendDev({ kind: 'set_latency', ms: 0 })
+  target.sendDev({ kind: 'set_drop_rate', rate: 0 })
+  target.sendDev({ kind: 'set_aggregation', mode: DEFAULT_AGGREGATION })
 }
 
 async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<BenchPhaseResult[] | 'cancelled'> {
