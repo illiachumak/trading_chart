@@ -19,7 +19,8 @@ import { isRecord } from '@/lib/utils/is-record'
 
 export type ProbeConfig = { slippage: number; amountUsd: number; everyMs: number; quoteAgeMs: number }
 
-export type BenchGroup = 'load' | 'batch' | 'slippage' | 'faults'
+/** 'stress' = a limit run past the realistic range (reported, not tracked against a budget). */
+export type BenchGroup = 'load' | 'batch' | 'slippage' | 'faults' | 'stress'
 
 export type BenchPhase = {
   name: string
@@ -298,6 +299,84 @@ const SCALE_PHASES: readonly BenchPhase[] = [
 ]
 
 export const SCALE_SCENARIO: BenchScenario = { phases: SCALE_PHASES, warmupMs: 2_000 }
+
+// --- Realistic scenario (the tracked set, with soak): server defaults (compact, 100 ms), fixed seeds ---
+
+const REALISTIC_PHASE_MS = 12_000
+const REALISTIC_BURST_MS = 30_000
+const REALISTIC_SLIPPAGE_MS = 20_000
+const REALISTIC_PROBE_EVERY_MS = 300
+const REALISTIC_QUOTE_AGE_MS = 250
+const REALISTIC_SLIPPAGE_RATES = [30, 100, 300] as const
+/** One-way latency injected by set_latency. */
+const REALISTIC_LATENCIES_MS = [0, 150] as const
+
+/**
+ * Fixed seeds, the same on every run. Slippage phases share one seed per rate so every tolerance
+ * and latency at that rate sees the same arrivals and sizes; only the probe settings differ.
+ */
+export const REALISTIC_SEEDS = {
+  steady30: 30_001,
+  steady300: 300_001,
+  burst1000: 1_000_001,
+  stress5000: 5_000_001,
+  disconnects: 100_001,
+  dropLatency: 100_002,
+  slippage: { 30: 30_101, 100: 100_101, 300: 300_101 },
+} as const
+
+const realisticPhase = (fields: Partial<BenchPhase> & Pick<BenchPhase, 'name' | 'group' | 'tradesPerSec' | 'seed'>): BenchPhase =>
+  phase({ aggregation: 'compact', durationMs: REALISTIC_PHASE_MS, ...fields })
+
+const REALISTIC_PHASES: readonly BenchPhase[] = [
+  realisticPhase({ name: 'steady 30/s', group: 'load', tradesPerSec: 30, seed: REALISTIC_SEEDS.steady30 }),
+  realisticPhase({ name: 'steady 300/s', group: 'load', tradesPerSec: 300, seed: REALISTIC_SEEDS.steady300 }),
+  realisticPhase({
+    name: 'burst 1000/s',
+    group: 'load',
+    tradesPerSec: 1_000,
+    durationMs: REALISTIC_BURST_MS,
+    seed: REALISTIC_SEEDS.burst1000,
+  }),
+  realisticPhase({ name: 'stress 5000/s (limit)', group: 'stress', tradesPerSec: 5_000, seed: REALISTIC_SEEDS.stress5000 }),
+  realisticPhase({
+    name: 'faults 3 disconnects @100/s',
+    group: 'faults',
+    tradesPerSec: 100,
+    disconnects: 3,
+    seed: REALISTIC_SEEDS.disconnects,
+  }),
+  realisticPhase({
+    name: 'faults drop 10% + 200ms @100/s',
+    group: 'faults',
+    tradesPerSec: 100,
+    dropRate: 0.1,
+    latencyMs: 200,
+    seed: REALISTIC_SEEDS.dropLatency,
+  }),
+  ...SLIPPAGE_SWEEP.flatMap((slippage) =>
+    REALISTIC_SLIPPAGE_RATES.flatMap((rate) =>
+      REALISTIC_LATENCIES_MS.map((latencyMs) =>
+        realisticPhase({
+          name: `slip ${Math.round(slippage * 100)}¢ lat ${latencyMs}ms @${rate}/s`,
+          group: 'slippage',
+          tradesPerSec: rate,
+          latencyMs,
+          durationMs: REALISTIC_SLIPPAGE_MS,
+          seed: REALISTIC_SEEDS.slippage[rate],
+          probe: {
+            slippage,
+            amountUsd: PROBE_AMOUNT_USD,
+            everyMs: REALISTIC_PROBE_EVERY_MS,
+            quoteAgeMs: REALISTIC_QUOTE_AGE_MS,
+          },
+        }),
+      ),
+    ),
+  ),
+]
+
+export const REALISTIC_SCENARIO: BenchScenario = { phases: REALISTIC_PHASES, warmupMs: 2_000 }
 
 // --- Helpers ---
 

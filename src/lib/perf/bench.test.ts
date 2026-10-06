@@ -8,6 +8,7 @@ import {
   DEEP_SCENARIO,
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
+  REALISTIC_SCENARIO,
   SCALE_SCENARIO,
   readCpuThrottleLabel,
   readHeapMb,
@@ -691,5 +692,72 @@ describe('set_balance and deep scenario', () => {
     expect(batch.every((p) => p.durationMs === 15_000 && p.tradesPerSec === 500 && p.probe === 'off')).toBe(true)
     expect(slip[0].name).toBe('slip 1¢ age 0ms @100/s')
     expect(slip.some((p) => p.name === 'slip 3¢ age 250ms @500/s')).toBe(true)
+  })
+})
+
+describe('realistic scenario', () => {
+  const phases = REALISTIC_SCENARIO.phases
+  const byGroup = (group: BenchPhase['group']) => phases.filter((p) => p.group === group)
+
+  it('runs compact at 100 ms batches with a fixed seed per phase', () => {
+    expect(REALISTIC_SCENARIO.warmupMs).toBe(2_000)
+    expect(phases).toHaveLength(30)
+    expect(new Set(phases.map((p) => p.name)).size).toBe(30)
+    expect(phases.every((p) => p.aggregation === 'compact' && p.batchMs === 100)).toBe(true)
+    expect(phases.every((p) => typeof p.seed === 'number')).toBe(true)
+  })
+
+  it('defines steady, burst, stress and fault phases', () => {
+    expect(byGroup('load').map((p) => [p.name, p.tradesPerSec, p.durationMs])).toEqual([
+      ['steady 30/s', 30, 12_000],
+      ['steady 300/s', 300, 12_000],
+      ['burst 1000/s', 1_000, 30_000],
+    ])
+    expect(byGroup('stress').map((p) => [p.tradesPerSec, p.durationMs])).toEqual([[5_000, 12_000]])
+    expect(byGroup('stress')[0].name).toContain('limit')
+    expect(byGroup('faults').map((p) => [p.tradesPerSec, p.disconnects, p.dropRate, p.latencyMs, p.durationMs])).toEqual([
+      [100, 3, 0, 0, 12_000],
+      [100, 0, 0.1, 200, 12_000],
+    ])
+    expect([...byGroup('load'), ...byGroup('stress'), ...byGroup('faults')].every((p) => p.probe === 'off')).toBe(true)
+  })
+
+  it('probes slippage 1/3/5/10¢ × 30/100/300 trades/s × latency 0/150 ms', () => {
+    const slip = byGroup('slippage')
+    expect(slip).toHaveLength(24)
+    expect(slip.map((p) => (p.probe === 'off' ? 'off' : [p.probe.slippage, p.tradesPerSec, p.latencyMs]))).toEqual(
+      [0.01, 0.03, 0.05, 0.1].flatMap((slippage) =>
+        [30, 100, 300].flatMap((rate) => [[slippage, rate, 0], [slippage, rate, 150]]),
+      ),
+    )
+    expect(
+      slip.every(
+        (p) =>
+          p.durationMs === 20_000 &&
+          p.dropRate === 0 &&
+          p.probe !== 'off' &&
+          p.probe.amountUsd === 5 &&
+          p.probe.everyMs === 300 &&
+          p.probe.quoteAgeMs === 250,
+      ),
+    ).toBe(true)
+    expect(slip[0].name).toBe('slip 1¢ lat 0ms @30/s')
+    // Same arrivals for every tolerance and latency at a rate: only the probe settings differ.
+    for (const rate of [30, 100, 300]) {
+      expect(new Set(slip.filter((p) => p.tradesPerSec === rate).map((p) => p.seed)).size).toBe(1)
+    }
+  })
+
+  it('uses the same seeds on every run (snapshot of the seed table)', () => {
+    expect(Object.fromEntries(phases.filter((p) => p.group !== 'slippage').map((p) => [p.name, p.seed]))).toEqual({
+      'steady 30/s': 30_001,
+      'steady 300/s': 300_001,
+      'burst 1000/s': 1_000_001,
+      'stress 5000/s (limit)': 5_000_001,
+      'faults 3 disconnects @100/s': 100_001,
+      'faults drop 10% + 200ms @100/s': 100_002,
+    })
+    const slipSeeds = Object.fromEntries(byGroup('slippage').map((p) => [p.tradesPerSec, p.seed]))
+    expect(slipSeeds).toEqual({ 30: 30_101, 100: 100_101, 300: 300_101 })
   })
 })
