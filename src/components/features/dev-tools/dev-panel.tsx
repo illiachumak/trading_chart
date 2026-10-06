@@ -12,7 +12,7 @@ export function DevPanel() {
   return (
     <>
       {hudVisible && <PerfHud />}
-      <footer className="border-t-hairline border-border bg-canvas">
+      <footer className="mb-[50px] border-t-hairline border-border bg-canvas">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-2 md:px-8">
           <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className={`${PILL} font-medium`}>
             Dev {open ? '▾' : '▸'}
