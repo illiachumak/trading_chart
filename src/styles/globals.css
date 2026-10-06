@@ -75,6 +75,12 @@
   box-shadow: var(--shadow-card);
 }
 
+/* Keyboard focus ring for every focusable element */
+:focus-visible {
+  outline: 2px solid var(--color-brand-text);
+  outline-offset: 2px;
+}
+
 /* Small uppercase section label (Morfi "HOW IT WORKS") */
 @utility eyebrow {
   font-size: var(--text-caption);
