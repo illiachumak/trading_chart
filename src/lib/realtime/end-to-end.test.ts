@@ -45,17 +45,30 @@ describe('client + mock server end to end', () => {
 
     client.start()
     await vi.advanceTimersByTimeAsync(2_000)
+    expect(client.getStatus()).toBe('live')
     dev({ kind: 'set_drop_rate', rate: 0.2 })
     await vi.advanceTimersByTimeAsync(20_000)
+    expect(client.getStatus()).toBe('live')
     dev({ kind: 'force_disconnect' })
     await vi.advanceTimersByTimeAsync(3_000)
+    expect(client.getStatus()).toBe('live')
     dev({ kind: 'set_latency', ms: 150 })
     await vi.advanceTimersByTimeAsync(20_000)
+    expect(client.getStatus()).toBe('live')
     dev({ kind: 'force_disconnect' })
     await vi.advanceTimersByTimeAsync(3_000)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(client.getStatus()).toBe('live')
     dev({ kind: 'set_drop_rate', rate: 0 })
     dev({ kind: 'set_latency', ms: 0 })
-    await vi.advanceTimersByTimeAsync(20_000) // crosses the 60 s round boundary
+    // Mid-round check at t = 50.05 s: the last 100 ms tick (t = 50.0 s) has been delivered
+    // and its 16 ms frame flushed; the next tick is at 50.1 s, so nothing is in flight.
+    await vi.advanceTimersByTimeAsync(1_050)
+    const midTruth = server.getSnapshot()
+    expect(midTruth.round.id).toBe(1)
+    expect(midTruth.history.length).toBeGreaterThan(30)
+    expect(feeder.getHistory()).toEqual(midTruth.history)
+    await vi.advanceTimersByTimeAsync(18_950) // crosses the 60 s round boundary
     pause()
     await vi.advanceTimersByTimeAsync(2_000)
 
@@ -66,6 +79,9 @@ describe('client + mock server end to end', () => {
     expect(client.getLastSeq()).toBe(server.getLastSeq())
     const truth = server.getSnapshot()
     expect(truth.round.id).toBe(2)
+    expect(truth.history.length).toBeGreaterThan(0)
     expect(feeder.getHistory()).toEqual(truth.history)
+    client.stop()
+    feeder.dispose()
   })
 })
