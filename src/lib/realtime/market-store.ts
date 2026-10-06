@@ -59,7 +59,7 @@ export class MarketStore {
     this.store = createExternalStore(this.draft)
   }
 
-  attach(client: MarketClient): () => void {
+  attach(client: Pick<MarketClient, 'onMessage' | 'onStatus'>): () => void {
     const offMessage = client.onMessage((message) => this.handle(message))
     const offStatus = client.onStatus((status) => {
       this.draft = { ...this.draft, status }
@@ -68,6 +68,7 @@ export class MarketStore {
     return () => {
       offMessage()
       offStatus()
+      this.cancelTrailing()
     }
   }
 
@@ -132,9 +133,13 @@ export class MarketStore {
     }
   }
 
-  private publishNow(): void {
+  private cancelTrailing(): void {
     if (this.trailing !== 'none') clearTimeout(this.trailing)
     this.trailing = 'none'
+  }
+
+  private publishNow(): void {
+    this.cancelTrailing()
     this.lastPublishAt = this.options.now()
     this.store.setState(this.draft)
   }

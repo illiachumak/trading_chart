@@ -4,6 +4,7 @@ import { ClockSync } from '@/lib/realtime/clock-sync'
 import {
   MarketStore,
   selectPrice,
+  selectLastResolution,
   selectRecentTrades,
   selectRound,
   selectUserTrades,
@@ -109,12 +110,105 @@ describe('MarketStore', () => {
   })
 })
 
+describe('MarketStore edge cases', () => {
+  it('publishNow cancels a pending trailing timer', () => {
+    const { market, publishes } = makeMarketStore()
+    market.handle(snapshot(1))
+    vi.advanceTimersByTime(200)
+    const before = publishes()
+    market.handle(trades(2, [mock(1, 0.55)]))
+    market.handle(trades(3, [mock(2, 0.56)]))
+    expect(publishes() - before).toBe(1)
+    market.handle({ type: 'round_started', seq: 4, ts: 60_000, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(publishes() - before).toBe(2)
+    vi.advanceTimersByTime(200)
+    expect(publishes() - before).toBe(2)
+    expect(selectPrice(market.store.getState())).toBe(0.5)
+    expect(selectRound(market.store.getState())).toEqual({ id: 2, startTs: 60_000, endTs: 120_000 })
+  })
+
+  it('reset clears a pending trailing timer', () => {
+    const { market, publishes } = makeMarketStore()
+    market.handle(snapshot(1))
+    vi.advanceTimersByTime(200)
+    market.handle(trades(2, [mock(1, 0.55)]))
+    market.handle(trades(3, [mock(2, 0.56)]))
+    market.reset()
+    const after = publishes()
+    expect(market.store.getState().phase).toBe('loading')
+    vi.advanceTimersByTime(200)
+    expect(publishes()).toBe(after)
+    expect(market.store.getState().phase).toBe('loading')
+  })
+
+  it('keeps unrelated slices stable across a no-user trade batch and ignores empty batches', () => {
+    const { market, publishes } = makeMarketStore()
+    market.handle(snapshot(1))
+    vi.advanceTimersByTime(200)
+    const s0 = market.store.getState()
+    market.handle(trades(2, [mock(1, 0.6)]))
+    const s1 = market.store.getState()
+    expect(selectUserTrades(s1)).toBe(selectUserTrades(s0))
+    expect(selectLastResolution(s1)).toBe(selectLastResolution(s0))
+    expect(selectRound(s1)).toBe(selectRound(s0))
+    const recent = selectRecentTrades(s1)
+    const before = publishes()
+    market.handle(trades(3, []))
+    vi.advanceTimersByTime(200)
+    expect(publishes()).toBe(before)
+    expect(selectRecentTrades(market.store.getState())).toBe(recent)
+  })
+
+  it('snapshot respects recentTradesLimit', () => {
+    const { market } = makeMarketStore()
+    const base = snapshot(1)
+    if (base.type !== 'snapshot') throw new Error('unreachable')
+    market.handle({ ...base, recentTrades: [5, 4, 3, 2, 1].map((id) => mock(id, 0.5)) })
+    expect(selectRecentTrades(market.store.getState()).map((t) => t.id)).toEqual([5, 4, 3])
+  })
+
+  it('keeps lastResolution through round_resolved -> round_started and clears user trades', () => {
+    const { market } = makeMarketStore()
+    market.handle(snapshot(1))
+    market.handle(trades(2, [user(1, 0.48)]))
+    vi.advanceTimersByTime(100)
+    market.handle({ type: 'round_resolved', seq: 3, ts: 60_000, roundId: 1, outcome: 'yes', payout: 0 })
+    expect(selectLastResolution(market.store.getState())).toEqual({ roundId: 1, outcome: 'yes' })
+    market.handle({ type: 'round_started', seq: 4, ts: 60_000, round: { id: 2, startTs: 60_000, endTs: 120_000 }, price: 0.5 })
+    expect(selectLastResolution(market.store.getState())).toEqual({ roundId: 1, outcome: 'yes' })
+    expect(selectUserTrades(market.store.getState())).toEqual([])
+  })
+
+  it('detaching cancels a pending trailing publish', () => {
+    const { market, publishes } = makeMarketStore()
+    const client = { onMessage: () => () => {}, onStatus: () => () => {} }
+    const detach = market.attach(client)
+    market.handle(snapshot(1))
+    vi.advanceTimersByTime(200)
+    market.handle(trades(2, [mock(1, 0.55)]))
+    market.handle(trades(3, [mock(2, 0.56)]))
+    const before = publishes()
+    detach()
+    vi.advanceTimersByTime(200)
+    expect(publishes()).toBe(before)
+  })
+})
+
 describe('ClockSync', () => {
   it('estimates the offset from the fastest sample', () => {
     const clock = new ClockSync(5)
     const skew = 5_000
     for (const latency of [40, 10, 25, 50]) clock.observe(1_000 + skew, 1_000 + latency)
     expect(clock.offsetMs).toBe(skew - 10)
+  })
+
+  it('evicts old samples beyond the window', () => {
+    const clock = new ClockSync(2)
+    clock.observe(1_100, 1_000) // sample 100 (best)
+    clock.observe(1_020, 1_000) // sample 20
+    expect(clock.offsetMs).toBe(100)
+    clock.observe(1_010, 1_000) // sample 10; evicts 100
+    expect(clock.offsetMs).toBe(20)
   })
 
   it('returns 0 without samples', () => {
