@@ -48,6 +48,7 @@ function fakeBench(
   const currentRound = (): number => roundAt(Date.now() - startedAt)
   const script = options.script ?? defaultScript
   const commands: DevCommand[] = []
+  const commandTimes: number[] = []
   const windows: { phase: string; edge: 'start' | 'end'; at: number }[] = []
   const quotes: { side: Side; at: number }[] = []
   const orders: { side: Side; expectedPrice: number; maxSlippage: number; roundId: number; at: number }[] = []
@@ -80,6 +81,7 @@ function fakeBench(
     sendDev: (command) => {
       integrate()
       commands.push(command)
+      commandTimes.push(Date.now())
       if (command.kind === 'set_rate') rate = command.tradesPerSec
       if (command.kind === 'set_batch_interval') batchMs = command.ms
       if (command.kind === 'set_aggregation') aggregation = command.mode
@@ -147,6 +149,7 @@ function fakeBench(
   return {
     deps,
     commands,
+    commandTimes,
     windows,
     quotes,
     orders,
@@ -185,6 +188,7 @@ const BASE: BenchPhase = {
   dropRate: 0,
   aggregation: 'full',
   probe: 'off',
+  seed: 'live',
 }
 
 const PROBE = { slippage: 0.03, amountUsd: 5, everyMs: 1_000, quoteAgeMs: 0 } as const
@@ -430,6 +434,44 @@ describe('runBench', () => {
     expect(result.probe.skipped).toBe(1)
     expect(result.probe.orders).toBe(2)
     expect(fake.orders.map((o) => o.roundId)).toEqual([1, 2])
+  })
+})
+
+describe('seeded phases', () => {
+  it('reset the market from the seed after the settings and before warm-up; live phases never reset', async () => {
+    const fake = fakeBench()
+    const results = await runOk(
+      [
+        { ...BASE, name: 'live', durationMs: 2_000 },
+        { ...BASE, name: 'seeded', durationMs: 2_000, seed: 1234 },
+        { ...BASE, name: 'seeded probe', group: 'slippage', durationMs: 2_000, seed: 99, probe: PROBE },
+      ],
+      fake,
+    )
+    expect(results.map((r) => r.seed)).toEqual(['live', 1234, 99])
+    const resets = fake.commands.flatMap((c, i) => (c.kind === 'reset_market' ? [{ i, seed: c.seed }] : []))
+    expect(resets.map((r) => r.seed)).toEqual([1234, 99])
+    for (const { i } of resets) {
+      // After set_rate, so the rebuilt arrival generator starts at the phase rate without a later redraw.
+      expect(fake.commands.slice(i - 5, i).map((c) => c.kind)).toEqual([
+        'set_rate',
+        'set_batch_interval',
+        'set_latency',
+        'set_drop_rate',
+        'set_aggregation',
+      ])
+    }
+    // The reset rebuilds the account, so the probe balance is set after it.
+    expect(fake.commands[resets[1].i + 1]).toEqual({ kind: 'set_balance', usd: 1_000 })
+    const starts = fake.windows.filter((w) => w.edge === 'start')
+    expect(fake.commandTimes[resets[0].i]).toBeLessThanOrEqual(starts[1].at - 1_000)
+    expect(fake.commandTimes[resets[1].i]).toBeLessThanOrEqual(starts[2].at - 1_000)
+  })
+
+  it('existing scenarios stay live', () => {
+    for (const scenario of [QUICK_SCENARIO, MATRIX_SCENARIO, DEEP_SCENARIO, SCALE_SCENARIO]) {
+      expect(scenario.phases.every((p) => p.seed === 'live')).toBe(true)
+    }
   })
 })
 

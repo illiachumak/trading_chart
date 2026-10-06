@@ -31,6 +31,11 @@ export type BenchPhase = {
   dropRate: number
   aggregation: AggregationMode
   probe: ProbeConfig | 'off'
+  /**
+   * A number resets the market from this seed at phase start (before warm-up), so every run sees
+   * the same trade sequence for the same rate; 'live' keeps whatever market is running.
+   */
+  seed: number | 'live'
 }
 
 export type BenchScenario = { phases: readonly BenchPhase[]; warmupMs: number }
@@ -106,6 +111,7 @@ export type BenchPhaseResult = {
   latencyMs: number
   dropRate: number
   aggregation: AggregationMode
+  seed: number | 'live'
   durationSec: number
   /** Measured window in `now()` time (performance.now in the browser). */
   windowStartMs: number
@@ -167,6 +173,7 @@ const phase = (fields: Partial<BenchPhase> & Pick<BenchPhase, 'name' | 'group' |
   // The published v2 numbers were measured with every trade shipped; keep these scenarios reproducible.
   aggregation: 'full',
   probe: 'off',
+  seed: 'live',
   ...fields,
 })
 
@@ -385,6 +392,9 @@ function applySettings(p: BenchPhase, target: BenchTarget): void {
   target.sendDev({ kind: 'set_latency', ms: p.latencyMs })
   target.sendDev({ kind: 'set_drop_rate', rate: p.dropRate })
   target.sendDev({ kind: 'set_aggregation', mode: p.aggregation })
+  // After set_rate: a rate change redraws the pending arrival gap, which would make the replay
+  // depend on when the command landed. Before set_balance: the reset rebuilds the account.
+  if (p.seed !== 'live') target.sendDev({ kind: 'reset_market', seed: p.seed })
   // Probe orders spend cash; start every probe phase from the same balance.
   if (p.probe !== 'off') target.sendDev({ kind: 'set_balance', usd: PROBE_START_BALANCE_USD })
 }
@@ -470,6 +480,7 @@ async function runPhases(scenario: BenchScenario, deps: BenchDeps): Promise<Benc
       latencyMs: p.latencyMs,
       dropRate: p.dropRate,
       aggregation: p.aggregation,
+      seed: p.seed,
       durationSec: round2(elapsedMs / 1_000),
       windowStartMs: round2(startedAt),
       windowEndMs: round2(endedAt),
