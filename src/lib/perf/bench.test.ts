@@ -8,6 +8,7 @@ import {
   DEEP_SCENARIO,
   MATRIX_SCENARIO,
   QUICK_SCENARIO,
+  SCALE_SCENARIO,
   readHeapMb,
   runBench,
 } from '@/lib/perf/bench'
@@ -427,6 +428,26 @@ describe('scenarios', () => {
   it('quick has the same phases at 4 s', () => {
     expect(QUICK_SCENARIO.phases.map((p) => ({ ...p, durationMs: 12_000 }))).toEqual(MATRIX_SCENARIO.phases)
     expect(QUICK_SCENARIO.phases.every((p) => p.durationMs === 4_000)).toBe(true)
+  })
+})
+
+describe('scale scenario', () => {
+  it('defines the load and batch sweeps', () => {
+    const names = SCALE_SCENARIO.phases.map((p) => p.name)
+    expect(SCALE_SCENARIO.warmupMs).toBe(2_000)
+    expect(SCALE_SCENARIO.phases).toHaveLength(13)
+    expect(new Set(names).size).toBe(13)
+    expect(SCALE_SCENARIO.phases.every((p) => p.durationMs === 12_000 && p.probe === 'off')).toBe(true)
+    const load = SCALE_SCENARIO.phases.filter((p) => p.group === 'load')
+    expect(load.map((p) => [p.tradesPerSec, p.aggregation, p.batchMs])).toEqual([
+      [1_000, 'full', 100], [1_000, 'compact', 100], [2_000, 'full', 100], [2_000, 'compact', 100],
+      [5_000, 'full', 100], [5_000, 'compact', 100], [10_000, 'full', 100], [10_000, 'compact', 100],
+    ])
+    const batch = SCALE_SCENARIO.phases.filter((p) => p.group === 'batch')
+    expect(batch.every((p) => p.tradesPerSec === 5_000)).toBe(true)
+    expect(batch.filter((p) => p.aggregation === 'compact').map((p) => p.batchMs)).toEqual([4, 8, 16, 33])
+    expect(batch.filter((p) => p.aggregation === 'full').map((p) => p.batchMs)).toEqual([16])
+    expect(names).toContain('scale 5000/s full b100')
   })
 })
 

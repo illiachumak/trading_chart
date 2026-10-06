@@ -219,6 +219,26 @@ const DEEP_PHASES: readonly BenchPhase[] = [
 
 export const DEEP_SCENARIO: BenchScenario = { phases: DEEP_PHASES, warmupMs: 2_000 }
 
+const SCALE_PHASE_MS = 12_000
+const SCALE_LOAD_RATES = [1_000, 2_000, 5_000, 10_000] as const
+const SCALE_BATCH_RATE = 5_000
+// The 100 ms points of the batch sweeps are the 5,000/s load phases (same settings, same name), so they are not repeated.
+const SCALE_BATCH_COMPACT_MS = [4, 8, 16, 33] as const
+const SCALE_BATCH_FULL_MS = [16] as const
+
+const scalePhase = (group: BenchGroup, tradesPerSec: number, aggregation: AggregationMode, batchMs: number): BenchPhase =>
+  phase({ name: `scale ${tradesPerSec}/s ${aggregation} b${batchMs}`, group, tradesPerSec, aggregation, batchMs, durationMs: SCALE_PHASE_MS })
+
+const SCALE_PHASES: readonly BenchPhase[] = [
+  ...SCALE_LOAD_RATES.flatMap((rate) =>
+    (['full', 'compact'] as const).map((mode) => scalePhase('load', rate, mode, BATCH_INTERVAL_MS)),
+  ),
+  ...SCALE_BATCH_COMPACT_MS.map((ms) => scalePhase('batch', SCALE_BATCH_RATE, 'compact', ms)),
+  ...SCALE_BATCH_FULL_MS.map((ms) => scalePhase('batch', SCALE_BATCH_RATE, 'full', ms)),
+]
+
+export const SCALE_SCENARIO: BenchScenario = { phases: SCALE_PHASES, warmupMs: 2_000 }
+
 // --- Helpers ---
 
 const LIVE_POLL_MS = 100

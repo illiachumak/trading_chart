@@ -1,4 +1,4 @@
-// Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix|deep`.
+// Runs the scripted benchmark against the live runtime when the URL has `?bench=quick|matrix|deep|scale`.
 // Harness hooks: `<html data-bench-phase>` is the phase name only inside the measured window,
 // `warmup:<name>` before it, `settle` after it and `done` at the end, so an external CDP sampler can
 // align its samples; each result also carries window timestamps. Results go to the panel and `console.info('[bench]')`.
@@ -13,6 +13,7 @@ import {
   type ProbeQuote,
   DEEP_SCENARIO,
   MATRIX_SCENARIO,
+  SCALE_SCENARIO,
   QUICK_SCENARIO,
   readHeapMb,
   runBench,
@@ -22,7 +23,7 @@ import type { MarketRuntime } from '@/lib/realtime/market-runtime'
 import { selectRound } from '@/lib/realtime/market-store'
 import type { OrderResult, ServerMessage } from '@/lib/realtime/protocol'
 
-export type BenchMode = 'quick' | 'matrix' | 'deep'
+export type BenchMode = 'quick' | 'matrix' | 'deep' | 'scale'
 
 export type BenchState =
   | { kind: 'idle'; mode: BenchMode }
@@ -36,10 +37,10 @@ const LIVE_POLL_MS = 100
 function readMode(): BenchMode | 'disabled' {
   if (!BENCH_AVAILABLE) return 'disabled'
   const value = new URLSearchParams(window.location.search).get('bench')
-  return value === 'quick' || value === 'matrix' || value === 'deep' ? value : 'disabled'
+  return value === 'quick' || value === 'matrix' || value === 'deep' || value === 'scale' ? value : 'disabled'
 }
 
-const SCENARIOS: Record<BenchMode, BenchScenario> = { quick: QUICK_SCENARIO, matrix: MATRIX_SCENARIO, deep: DEEP_SCENARIO }
+const SCENARIOS: Record<BenchMode, BenchScenario> = { quick: QUICK_SCENARIO, matrix: MATRIX_SCENARIO, deep: DEEP_SCENARIO, scale: SCALE_SCENARIO }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 

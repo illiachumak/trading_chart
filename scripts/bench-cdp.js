@@ -9,7 +9,12 @@
 // `<html data-bench-phase>`, waits for `[data-testid=bench-result]`, then aggregates each measured window
 // (samples inside warm-up / settle / done phases are dropped).
 //
-// Returns a JSON string: { ua, samples, benchChars, cdp }, where cdp[phase] has
+// CPU throttling: set CPU_THROTTLE below (1 = none, 4 / 6 = slowdown factor); it is applied through CDP
+// `Emulation.setCPUThrottlingRate` right after the session is created, before navigation.
+//
+// Returns a JSON string: { ua, cpuThrottle, samples, benchChars, cdp } — only the per-phase CDP aggregate, not the
+// bench JSON (keeps the output small). Read the bench JSON afterwards from `[data-testid=bench-result]`
+// (e.g. `browser_evaluate`). cdp[phase] has
 //   wallSec            seconds of samples inside the measured window
 //   mainThreadBusyPct  CDP TaskDuration / wall time * 100
 //   scriptMsPerSec     ScriptDuration ms per wall second
@@ -19,10 +24,12 @@
 // Phase names match `phase` in the bench results shown in the panel / `[bench]` console JSON.
 
 async (page) => {
-  // Change the query to pick the scenario: ?bench=quick (~3 min) | matrix (~9 min) | deep (~16 min).
+  // Change the query to pick the scenario: ?bench=quick (~3 min) | matrix (~9 min) | deep (~16 min) | scale (~4 min).
+  const CPU_THROTTLE = 1 // 1 = no throttling; 4 or 6 = CPU slowed by that factor
   const BENCH_URL = 'http://localhost:4173/?bench=matrix'
   const url = BENCH_URL
   const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE })
   await session.send('Performance.enable', { timeDomain: 'timeTicks' })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(url)
@@ -72,5 +79,5 @@ async (page) => {
     }
   }
   const ua = await page.evaluate(() => navigator.userAgent)
-  return JSON.stringify({ ua, samples: samples.length, benchChars: bench.length, cdp })
+  return JSON.stringify({ ua, cpuThrottle: CPU_THROTTLE, samples: samples.length, benchChars: bench.length, cdp })
 }
