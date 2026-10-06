@@ -71,14 +71,15 @@ const ORDER: PlaceOrder = {
   maxSlippage: 0.02,
 }
 
-function setup() {
+function setup({ random = 1, maxPendingMessages = 1_000 } = {}) {
   const fake = fakeSockets()
   const client = new MarketClient({
     createSocket: fake.factory,
-    random: () => 1,
+    random: () => random,
     backoffBaseMs: 100,
     backoffMaxMs: 1_000,
     resyncTimeoutMs: 500,
+    maxPendingMessages,
   })
   const seen: number[] = []
   client.onMessage((message) => seen.push(message.seq))
@@ -296,10 +297,100 @@ describe('MarketClient', () => {
     expect(client.getStatus()).toBe('reconnecting')
   })
 
-  it('requestSnapshot asks for fromSeq 0', () => {
-    const { fake, client, goLive } = setup()
+  it('requestSnapshot asks for fromSeq 0 and retries until answered', () => {
+    const { fake, client, seen, goLive } = setup()
     goLive(3)
     client.requestSnapshot()
     expect(fake.latest().sent.at(-1)).toEqual({ type: 'resync', fromSeq: 0 })
+    vi.advanceTimersByTime(500)
+    expect(fake.latest().sent.filter((m) => m.type === 'resync' && m.fromSeq === 0)).toHaveLength(2)
+    // Same seq as lastSeq, but explicitly requested → applied.
+    fake.latest().handlers.onMessage(snapshot(3))
+    expect(seen).toEqual([3, 3])
+    vi.advanceTimersByTime(5_000)
+    expect(fake.latest().sent.filter((m) => m.type === 'resync' && m.fromSeq === 0)).toHaveLength(2)
+  })
+
+  it('drops snapshots that are older than, or unrequested at, the current seq', () => {
+    const { fake, client, seen, goLive } = setup()
+    goLive(10)
+    fake.latest().handlers.onMessage(heartbeat(11))
+    fake.latest().handlers.onMessage(snapshot(9))
+    fake.latest().handlers.onMessage(snapshot(11))
+    expect(seen).toEqual([10, 11])
+    expect(client.stats.duplicates).toBe(2)
+  })
+
+  it('applies full jitter to the reconnect delay', () => {
+    const { fake, client, goLive } = setup({ random: 0.25 })
+    goLive(10)
+    fake.latest().handlers.onClose()
+    vi.advanceTimersByTime(24)
+    expect(fake.sockets).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(fake.sockets).toHaveLength(2)
+    expect(client.getStatus()).toBe('reconnecting')
+  })
+
+  it('grows the backoff for a server that accepts and then drops, and resets it once live', () => {
+    const { fake, client } = setup()
+    client.start()
+    for (const delay of [100, 200, 400]) {
+      fake.latest().handlers.onOpen()
+      fake.latest().handlers.onClose()
+      const count = fake.sockets.length
+      vi.advanceTimersByTime(delay - 1)
+      expect(fake.sockets).toHaveLength(count)
+      vi.advanceTimersByTime(1)
+      expect(fake.sockets).toHaveLength(count + 1)
+    }
+    fake.latest().handlers.onOpen()
+    fake.latest().handlers.onMessage(snapshot(1))
+    fake.latest().handlers.onClose()
+    vi.advanceTimersByTime(100)
+    expect(client.getStatus()).toBe('reconnecting')
+    expect(fake.sockets).toHaveLength(5)
+  })
+
+  it('keeps waiting for the resync while holes remain after a partial replay', () => {
+    const { fake, client, seen, goLive } = setup()
+    goLive(10)
+    const socket = fake.latest()
+    socket.handlers.onMessage(heartbeat(13))
+    socket.handlers.onMessage(heartbeat(11)) // 12 is still missing
+    expect(seen).toEqual([10, 11])
+    vi.advanceTimersByTime(500)
+    expect(socket.sent.at(-1)).toEqual({ type: 'resync', fromSeq: 12 })
+    expect(client.stats.resyncs).toBe(2)
+  })
+
+  it('re-sends an in-flight order after a snapshot that may have covered its result', () => {
+    const { fake, client, goLive } = setup()
+    goLive(10)
+    const socket = fake.latest()
+    client.send(ORDER)
+    const orders = () => socket.sent.filter((m) => m.type === 'place_order').length
+    expect(orders()).toBe(1)
+    socket.handlers.onMessage(heartbeat(13)) // gap: the order_result may be in 11..12
+    socket.handlers.onMessage(snapshot(14)) // server answered with a snapshot instead of a replay
+    expect(orders()).toBe(2)
+    socket.handlers.onMessage(orderResult(15, 'c1'))
+    socket.handlers.onMessage(heartbeat(16))
+    socket.handlers.onMessage(snapshot(20))
+    expect(orders()).toBe(2)
+  })
+
+  it('falls back to a snapshot when the out-of-order backlog hits the cap', () => {
+    const { fake, client, seen, goLive } = setup({ maxPendingMessages: 3 })
+    goLive(10)
+    const socket = fake.latest()
+    for (const seq of [12, 13, 14]) socket.handlers.onMessage(heartbeat(seq))
+    expect(socket.sent.at(-1)).toEqual({ type: 'resync', fromSeq: 11 })
+    socket.handlers.onMessage(heartbeat(15))
+    expect(socket.sent.at(-1)).toEqual({ type: 'resync', fromSeq: 0 })
+    socket.handlers.onMessage(snapshot(15))
+    socket.handlers.onMessage(heartbeat(16))
+    expect(seen).toEqual([10, 15, 16])
+    expect(client.getStatus()).toBe('live')
   })
 })

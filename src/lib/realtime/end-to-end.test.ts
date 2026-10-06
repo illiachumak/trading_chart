@@ -23,6 +23,7 @@ describe('client + mock server end to end', () => {
       backoffBaseMs: 100,
       backoffMaxMs: 1_000,
       resyncTimeoutMs: 300,
+      maxPendingMessages: 5_000,
     })
     const feeder = new ChartFeeder(
       { update: () => {}, setData: () => {} },

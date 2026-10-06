@@ -27,6 +27,8 @@ export type MarketClientOptions = {
   backoffBaseMs: number
   backoffMaxMs: number
   resyncTimeoutMs: number
+  /** Out-of-order messages kept while waiting for a resync; beyond this, fall back to a snapshot. */
+  maxPendingMessages: number
 }
 
 type Timer = ReturnType<typeof setTimeout>
@@ -50,6 +52,9 @@ export class MarketClient {
   /** True once a socket has closed since start(); the next open then counts as a reconnect. */
   private hasClosed = false
   private readonly inflight = new Map<string, PlaceOrder>()
+  /** Re-send in-flight orders once caught up: after a reconnect, or after a snapshot that may hide their results. */
+  private resendOrders = false
+  /** Consecutive connections that closed before going live; drives the reconnect backoff. */
   private attempt = 0
   private reconnectTimer: Timer | 'none' = 'none'
   private resyncTimer: Timer | 'none' = 'none'
@@ -101,6 +106,7 @@ export class MarketClient {
     this.snapshotWanted = false
     this.retries = 0
     this.hasClosed = false
+    this.resendOrders = false
     this.attempt = 0
     this.setStatus('idle')
   }
@@ -115,9 +121,10 @@ export class MarketClient {
     this.rawSend(message)
   }
 
+  /** Asks for a full snapshot; retried like any resync. A closed socket asks on the next open. */
   requestSnapshot(): void {
     this.snapshotWanted = true
-    if (this.socketOpen) this.rawSend({ type: 'resync', fromSeq: 0 })
+    if (this.socketOpen) this.requestResync(false)
   }
 
   private connect(status: 'connecting' | 'reconnecting'): void {
@@ -139,8 +146,8 @@ export class MarketClient {
 
   private handleOpen(): void {
     this.socketOpen = true
-    this.attempt = 0
     this.retries = 0
+    this.resendOrders = true
     if (this.hasClosed) this.stats.reconnects++
     this.setStatus('resyncing')
     this.requestResync(false)
@@ -193,6 +200,12 @@ export class MarketClient {
       this.drainPending()
       return
     }
+    if (this.pending.size >= this.options.maxPendingMessages) {
+      // The gap is not closing; drop the backlog and rebuild from a snapshot instead.
+      this.pending.clear()
+      this.requestSnapshot()
+      return
+    }
     this.pending.set(message.seq, message)
     if (!this.awaitingResync) {
       this.stats.gaps++
@@ -201,12 +214,15 @@ export class MarketClient {
   }
 
   private acceptSnapshot(snapshot: SnapshotMessage): void {
-    if (snapshot.seq < this.lastSeq) {
+    // An equal seq is applied only when a snapshot was explicitly requested (e.g. a chart remount).
+    if (snapshot.seq < this.lastSeq || (snapshot.seq === this.lastSeq && !this.snapshotWanted)) {
       this.stats.duplicates++
       return
     }
     this.lastSeq = snapshot.seq
     this.snapshotWanted = false
+    // order_results up to this seq will never arrive; re-sending makes the server repeat them.
+    if (this.inflight.size > 0) this.resendOrders = true
     for (const seq of this.pending.keys()) {
       if (seq <= snapshot.seq) this.pending.delete(seq)
     }
@@ -225,12 +241,13 @@ export class MarketClient {
   }
 
   private caughtUp(): void {
-    const afterConnect = this.status === 'resyncing'
     this.awaitingResync = false
     this.retries = 0
+    this.attempt = 0
     this.clearResyncTimer()
     this.setStatus('live')
-    if (afterConnect) {
+    if (this.resendOrders) {
+      this.resendOrders = false
       for (const order of this.inflight.values()) this.rawSend(order)
     }
   }

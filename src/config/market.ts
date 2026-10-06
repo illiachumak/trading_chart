@@ -24,10 +24,13 @@ export const MAX_LATENCY_MS = 5_000
 export const MAX_DROP_RATE = 0.9
 
 // Client
-export const UI_THROTTLE_MS = 100
+/** CLAUDE.md §3: tick-driven UI updates a few times per second at most. */
+export const UI_THROTTLE_MS = 250
 export const CHART_BACKLOG_THRESHOLD = 30
 export const RECONNECT_BASE_MS = 250
 export const RECONNECT_MAX_MS = 5_000
 export const RESYNC_TIMEOUT_MS = 1_000
+/** Out-of-order backlog cap while waiting for a resync; beyond it the client asks for a snapshot. */
+export const MAX_PENDING_MESSAGES = 5_000
 export const CLOCK_SYNC_WINDOW = 20
 export const PERF_SAMPLE_CAPACITY = 4_000

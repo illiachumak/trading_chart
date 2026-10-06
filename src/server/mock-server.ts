@@ -143,6 +143,12 @@ export class MockServer {
           this.send(connId, { ...this.engine.snapshot(now), seq: this.outbox.lastSeq })
           return
         }
+        if (replay.length === 0) {
+          // The client is already up to date. Publish a heartbeat so it sees seq = lastSeq + 1
+          // and goes live now instead of waiting for the next trade or quiet-interval heartbeat.
+          this.broadcast(this.publish({ type: 'heartbeat', ts: now }))
+          return
+        }
         for (const replayed of replay) this.send(connId, replayed)
         return
       }
