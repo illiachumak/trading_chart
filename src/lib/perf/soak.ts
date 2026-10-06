@@ -20,6 +20,8 @@ export const SOAK_SAMPLE_EVERY_MS = 60_000
 export const SOAK_SEED = 30_303
 
 const MS_PER_MIN = 60_000
+/** Longest single sleep, so a cancel (e.g. leaving the page) is noticed within a second. */
+export const SOAK_SLEEP_STEP_MS = 1_000
 
 export type SoakConfig = {
   name: string
@@ -135,10 +137,20 @@ function maxLoafPerMin(samples: readonly SoakSample[]): number | 'n/a' {
   return max
 }
 
+/** Sleeps `ms` in steps of at most SOAK_SLEEP_STEP_MS; 'cancelled' as soon as a step ends with a cancel. */
+async function sleepUnlessCancelled(ms: number, deps: Pick<SoakDeps, 'sleep' | 'isCancelled'>): Promise<'slept' | 'cancelled'> {
+  // Counts down by the requested steps (not the clock): step overshoot is absorbed by the caller's
+  // window-anchored schedule, and a fake sleep that resolves instantly can't loop forever.
+  for (let left = ms; left > 0; left -= SOAK_SLEEP_STEP_MS) {
+    await deps.sleep(Math.min(left, SOAK_SLEEP_STEP_MS))
+    if (deps.isCancelled()) return 'cancelled'
+  }
+  return deps.isCancelled() ? 'cancelled' : 'slept'
+}
+
 async function soak(config: SoakConfig, deps: SoakDeps): Promise<SoakResult | 'cancelled'> {
   const seedApplied = await applySettings({ ...config, latencyMs: 0, dropRate: 0, probe: 'off' }, deps)
-  await deps.sleep(config.warmupMs)
-  if (deps.isCancelled()) return 'cancelled'
+  if ((await sleepUnlessCancelled(config.warmupMs, deps)) === 'cancelled') return 'cancelled'
 
   const total = Math.ceil(config.durationMs / config.sampleEveryMs)
   const samples: SoakSample[] = []
@@ -155,8 +167,7 @@ async function soak(config: SoakConfig, deps: SoakDeps): Promise<SoakResult | 'c
   for (let index = 1; index <= total; index++) {
     // Scheduled from the window start, so sleep overshoot doesn't accumulate.
     const waitMs = startedAt + Math.min(index * config.sampleEveryMs, config.durationMs) - deps.now()
-    if (waitMs > 0) await deps.sleep(waitMs)
-    if (deps.isCancelled()) return 'cancelled'
+    if ((await sleepUnlessCancelled(waitMs, deps)) === 'cancelled') return 'cancelled'
 
     const at = deps.now()
     const snap = deps.metrics.snapshot()

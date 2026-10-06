@@ -217,6 +217,25 @@ describe('runSoak', () => {
     expect(result.environment).toEqual({ ...ENVIRONMENT, displayHz: 60, seed: SOAK_CONFIG.seed })
   })
 
+  it('notices a cancel within a second even mid-interval (sleeps in steps of at most 1 s)', async () => {
+    let cancelled = false
+    const fake = fakeSoak({ isCancelled: () => cancelled })
+    const long: SoakConfig = { ...SOAK_CONFIG, warmupMs: 500, durationMs: 180_000, sampleEveryMs: 60_000 }
+    let settled = false
+    const promise = runSoak(long, fake.deps).then((result) => {
+      settled = true
+      return result
+    })
+    // 10 s into the first 60 s interval.
+    await vi.advanceTimersByTimeAsync(10_500)
+    cancelled = true
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(settled).toBe(true)
+    fake.release()
+    expect(await promise).toBe('cancelled')
+    expect(fake.samples).toHaveLength(0)
+  })
+
   it('stops when cancelled and still restores defaults', async () => {
     let cancelled = false
     const fake = fakeSoak({ isCancelled: () => cancelled })
