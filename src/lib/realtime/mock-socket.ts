@@ -53,3 +53,5 @@ export function createWorkerSocketFactory(worker: WorkerLike): SocketFactory {
     }
   }
 }
+
+export type WorkerHandle = WorkerLike & { terminate(): void }
