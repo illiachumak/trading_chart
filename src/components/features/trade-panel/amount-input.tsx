@@ -1,3 +1,5 @@
+import { Button } from '@/components/common/button'
+import { cn } from '@/lib/utils/cn'
 import { isAmountInProgress } from '@/lib/utils/parse-amount'
 
 const PRESETS = ['10', '50', '100'] as const
@@ -12,9 +14,10 @@ export function AmountInput({ value, valid, onChange }: AmountInputProps) {
         Amount
       </label>
       <div
-        className={`flex items-center rounded-control border-hairline bg-surface-raised px-3 transition-colors focus-within:ring-2 focus-within:ring-accent ${
-          inProgress || valid ? 'border-border focus-within:border-accent' : 'border-no'
-        }`}
+        className={cn(
+          'flex items-center rounded-control border-hairline bg-surface-raised px-3 transition-colors focus-within:ring-2 focus-within:ring-accent',
+          inProgress || valid ? 'border-border focus-within:border-accent' : 'border-no',
+        )}
       >
         <span className="text-muted">$</span>
         <input
@@ -29,14 +32,9 @@ export function AmountInput({ value, valid, onChange }: AmountInputProps) {
       </div>
       <div className="flex gap-2">
         {PRESETS.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            onClick={() => onChange(preset)}
-            className="inline-flex h-7 items-center rounded-pill border-hairline border-border bg-surface-raised px-3 text-caption text-fg-secondary tabular-nums transition-colors hover:text-fg"
-          >
+          <Button key={preset} variant="subtle" size="sm" className="font-normal" onClick={() => onChange(preset)}>
             ${preset}
-          </button>
+          </Button>
         ))}
       </div>
     </div>

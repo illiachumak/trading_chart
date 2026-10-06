@@ -38,14 +38,16 @@ export function useTradeTicket(): TradeTicket {
     dismiss()
   }
 
-  const canSubmit =
+  // Single source of truth for "can this ticket be sent right now", narrowed for submit().
+  const ready =
     status === 'live' && round !== 'loading' && quote !== 'none' && quote.status === 'ok' && order.kind !== 'pending'
+      ? { roundId: round.id, quote }
+      : 'not-ready'
 
   const submit = (): void => {
-    if (status !== 'live' || round === 'loading' || quote === 'none' || quote.status !== 'ok') return
-    if (order.kind === 'pending') return
+    if (ready === 'not-ready') return
     // The quote's average price is what the user saw; the server enforces slippage against it.
-    place({ roundId: round.id, side, amountUsd: quote.amountUsd, expectedPrice: quote.avgPrice })
+    place({ roundId: ready.roundId, side, amountUsd: ready.quote.amountUsd, expectedPrice: ready.quote.avgPrice })
   }
 
   return {
@@ -56,7 +58,7 @@ export function useTradeTicket(): TradeTicket {
     amountValid: amount !== 'invalid',
     quote,
     order,
-    canSubmit,
+    canSubmit: ready !== 'not-ready',
     submit,
   }
 }

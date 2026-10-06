@@ -1,28 +1,25 @@
-import { useMarket } from '@/hooks/use-market'
-import { selectPrice } from '@/lib/realtime/market-store'
+import { LivePrice } from '@/components/features/market/live-price'
 import type { Side } from '@/lib/realtime/protocol'
-import { formatSideCents } from '@/lib/utils/format'
-import { SIDE_LABEL } from '@/lib/utils/side-label'
+import { cn } from '@/lib/utils/cn'
+import { SIDE_LABEL, SIDE_TONE } from '@/lib/utils/side'
 
-const SELECTED: Record<Side, string> = {
-  yes: 'border-yes/40 bg-yes-strong text-yes',
-  no: 'border-no/40 bg-no-strong text-no',
-}
 const IDLE = 'border-border bg-surface-raised text-fg-secondary hover:text-fg'
 
 type SideButtonProps = { side: Side; selected: boolean; onSelect: (side: Side) => void }
 
 export function SideButton({ side, selected, onSelect }: SideButtonProps) {
-  const price = useMarket(selectPrice)
-  const tone = selected ? SELECTED[side] : IDLE
+  const tone = SIDE_TONE[side]
   return (
     <button
       type="button"
       aria-pressed={selected}
       onClick={() => onSelect(side)}
-      className={`h-11 rounded-control border-hairline text-body font-semibold tabular-nums transition-colors ${tone}`}
+      className={cn(
+        'h-11 rounded-control border-hairline text-body font-semibold tabular-nums transition-colors',
+        selected ? cn(tone.strong, tone.text) : IDLE,
+      )}
     >
-      {SIDE_LABEL[side]} {price === 'loading' ? '—' : formatSideCents(price, side)}
+      {SIDE_LABEL[side]} <LivePrice side={side} format="cents" />
     </button>
   )
 }

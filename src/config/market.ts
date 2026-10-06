@@ -41,3 +41,7 @@ export const QUOTE_REFRESH_MS = 1_000
 export const DEFAULT_MAX_SLIPPAGE = 0.02
 export const STRESS_TRADES_PER_SEC = 500
 export const HUD_REFRESH_MS = 500
+/** Dev panel slider ranges — narrower than the server limits (MAX_LATENCY_MS, MAX_DROP_RATE) for usable steps. */
+export const DEV_RATE_RANGE = { min: 5, max: 100, step: 5 } as const
+export const DEV_LATENCY_RANGE = { min: 0, max: 1_000, step: 50 } as const
+export const DEV_DROP_PCT_RANGE = { min: 0, max: 50, step: 5 } as const

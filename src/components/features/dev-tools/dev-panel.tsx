@@ -1,8 +1,11 @@
 import { useState } from 'react'
+import { Button } from '@/components/common/button'
 import { PerfHud } from '@/components/features/perf-hud/perf-hud'
+import { Container } from '@/components/layout/container'
+import { DEV_DROP_PCT_RANGE, DEV_LATENCY_RANGE, DEV_RATE_RANGE, STRESS_TRADES_PER_SEC } from '@/config/market'
 import { useDevControls } from '@/hooks/use-dev-controls'
 
-const PILL = 'inline-flex h-8 items-center gap-2 rounded-pill border-hairline border-border bg-surface px-3 text-body'
+type Range = { min: number; max: number; step: number }
 
 export function DevPanel() {
   const controls = useDevControls()
@@ -12,62 +15,51 @@ export function DevPanel() {
   return (
     <>
       {hudVisible && <PerfHud />}
-      <footer className="mb-[50px] border-t-hairline border-border bg-canvas">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 py-2 md:px-8">
-          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className={`${PILL} font-medium`}>
+      <footer className="mb-12.5 border-t-hairline border-border bg-canvas">
+        <Container className="flex flex-wrap items-center gap-x-6 gap-y-3 py-2">
+          <Button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="text-fg">
             Dev {open ? '▾' : '▸'}
-          </button>
-          <button
-            type="button"
-            aria-pressed={hudVisible}
-            onClick={() => setHudVisible((v) => !v)}
-            className={`${PILL} ${hudVisible ? 'text-fg' : 'text-fg-secondary'}`}
-          >
+          </Button>
+          <Button aria-pressed={hudVisible} onClick={() => setHudVisible((v) => !v)} className="font-normal">
             Perf HUD
-          </button>
+          </Button>
           {open && (
             <>
               <Slider
                 label="Trades/s"
+                range={DEV_RATE_RANGE}
                 value={controls.rate}
-                min={5}
-                max={100}
-                step={5}
                 display={`${controls.rate}`}
                 onChange={controls.setRate}
               />
-              <button type="button" onClick={controls.stress} className={`${PILL} text-fg-secondary hover:text-fg`}>
-                Stress 500/s
-              </button>
+              <Button onClick={controls.stress} className="font-normal">
+                Stress {STRESS_TRADES_PER_SEC}/s
+              </Button>
               <Slider
                 label="Latency"
+                range={DEV_LATENCY_RANGE}
                 value={controls.latencyMs}
-                min={0}
-                max={1_000}
-                step={50}
                 display={`${controls.latencyMs} ms`}
                 onChange={controls.setLatency}
               />
               <Slider
                 label="Drop"
+                range={DEV_DROP_PCT_RANGE}
                 value={controls.dropRatePct}
-                min={0}
-                max={50}
-                step={5}
                 display={`${controls.dropRatePct}%`}
                 onChange={controls.setDropRatePct}
               />
-              <button
-                type="button"
+              <Button
+                variant="danger"
                 onClick={controls.dropConnection}
-                className="inline-flex h-8 items-center gap-2 rounded-pill border-hairline border-no/40 bg-no-strong px-3 text-body text-no"
+                className="font-normal"
                 data-testid="drop-connection"
               >
                 Drop connection
-              </button>
+              </Button>
             </>
           )}
-        </div>
+        </Container>
       </footer>
     </>
   )
@@ -75,24 +67,23 @@ export function DevPanel() {
 
 type SliderProps = {
   label: string
+  range: Range
   value: number
-  min: number
-  max: number
-  step: number
   display: string
   onChange: (value: number) => void
 }
 
-function Slider({ label, value, min, max, step, display, onChange }: SliderProps) {
+function Slider({ label, range, value, display, onChange }: SliderProps) {
   return (
     <label className="flex items-center gap-2 text-body">
       <span className="text-muted">{label}</span>
       <input
         type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={Math.min(value, max)}
+        min={range.min}
+        max={range.max}
+        step={range.step}
+        // Stress mode sets the rate above the slider's range; pin the thumb to the end.
+        value={Math.min(value, range.max)}
         onChange={(event) => onChange(Number(event.target.value))}
         className="accent-accent"
       />

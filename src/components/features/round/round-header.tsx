@@ -1,37 +1,30 @@
 import { useCallback } from 'react'
+import { Skeleton } from '@/components/common/skeleton'
+import { LivePrice } from '@/components/features/market/live-price'
+import { SideLabel } from '@/components/features/market/side-label'
 import { useCountdown } from '@/hooks/use-countdown'
 import { useMarket } from '@/hooks/use-market'
 import { useMarketRuntime } from '@/hooks/use-market-runtime'
-import { selectLastResolution, selectPrice, selectRound } from '@/lib/realtime/market-store'
-import { formatCountdown, formatPercent } from '@/lib/utils/format'
-import { SIDE_LABEL } from '@/lib/utils/side-label'
+import { selectLastResolution, selectRound } from '@/lib/realtime/market-store'
+import { formatCountdown } from '@/lib/utils/format'
 
 export function RoundHeader() {
   const round = useMarket(selectRound)
-  if (round === 'loading') {
-    return <div className="h-20 animate-pulse rounded-control bg-surface-raised" />
-  }
+  if (round === 'loading') return <Skeleton className="h-20" />
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div>
         <h2 className="eyebrow">Round #{round.id}</h2>
-        <Probability />
+        <p className="mt-1 text-display tabular-nums" data-testid="probability">
+          <LivePrice side="yes" format="percent" />
+          <span className="ml-2 text-body-lg font-normal tracking-normal text-fg-secondary">chance YES</span>
+        </p>
       </div>
       <div className="text-right">
         <Countdown endTs={round.endTs} />
         <LastResolution />
       </div>
     </div>
-  )
-}
-
-function Probability() {
-  const price = useMarket(selectPrice)
-  return (
-    <p className="mt-1 text-display tabular-nums" data-testid="probability">
-      {price === 'loading' ? '—' : formatPercent(price)}
-      <span className="ml-2 text-body-lg font-normal tracking-normal text-fg-secondary">chance YES</span>
-    </p>
   )
 }
 
@@ -52,10 +45,7 @@ function LastResolution() {
   if (resolution === 'none') return <p className="text-body text-muted">Resolves by coinflip</p>
   return (
     <p className="text-body text-muted">
-      Round #{resolution.roundId} →{' '}
-      <span className={resolution.outcome === 'yes' ? 'font-medium text-yes' : 'font-medium text-no'}>
-        {SIDE_LABEL[resolution.outcome]}
-      </span>
+      Round #{resolution.roundId} → <SideLabel side={resolution.outcome} />
     </p>
   )
 }

@@ -21,7 +21,7 @@ import { ChartFeeder } from '@/lib/realtime/chart-feeder'
 import { selectUserTrades } from '@/lib/realtime/market-store'
 import type { ChartPoint, Trade } from '@/lib/realtime/protocol'
 import { formatClock, formatPercent } from '@/lib/utils/format'
-import { SIDE_LABEL } from '@/lib/utils/side-label'
+import { SIDE_LABEL } from '@/lib/utils/side'
 
 // Lightweight Charts brands unix seconds as UTCTimestamp; this is the one sanctioned cast.
 // Bars of whitespace kept right of the live point.
@@ -45,7 +45,7 @@ function toMarker(trade: Trade): SeriesMarker<Time> {
     time: toUtc(Math.floor(trade.ts / 1_000)),
     position: yes ? 'belowBar' : 'aboveBar',
     shape: yes ? 'arrowUp' : 'arrowDown',
-    color: yes ? CHART_COLORS.yes : CHART_COLORS.no,
+    color: CHART_COLORS[trade.side],
     text: `${SIDE_LABEL[trade.side]} ${Math.round(trade.shares)}`,
   }
 }

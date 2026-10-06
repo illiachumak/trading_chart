@@ -1,17 +1,17 @@
 import type { OrderResult, RejectReason } from '@/lib/realtime/protocol'
 import { PRICE_BOUND } from '@/config/market'
 import { formatCents, formatPercent, formatShares, formatUsd } from '@/lib/utils/format'
-import { SIDE_LABEL } from '@/lib/utils/side-label'
+import { SIDE_LABEL } from '@/lib/utils/side'
 
 export type OrderMessage = { tone: 'yes' | 'no' | 'warn'; text: string }
 
-const LIMIT_TEXT = `Price is at the ${formatPercent(PRICE_BOUND)} limit — no shares available`
+export const PRICE_LIMIT_TEXT = `Price is at the ${formatPercent(PRICE_BOUND)} limit — no shares available`
 
 const REJECTION_TEXT: Record<Exclude<RejectReason, 'slippage'>, string> = {
   round_closed: 'Round closed before your order arrived',
   insufficient_balance: 'Insufficient balance',
   invalid: 'Invalid order',
-  price_limit: LIMIT_TEXT,
+  price_limit: PRICE_LIMIT_TEXT,
 }
 
 export function describeOrderResult(result: OrderResult): OrderMessage {
